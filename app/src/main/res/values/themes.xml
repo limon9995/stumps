@@ -1,0 +1,13 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!--
+        This is the plain Android (not Compose) theme the OS uses for the split-second window
+        that exists before MainActivity.kt's Compose content actually draws anything — mostly
+        just the window's own background colour. Setting it here to the SAME cream colour
+        StumpsTheme.kt uses for light mode means that split-second window matches instead of
+        flashing a default white/grey before the real app appears. See values-night/themes.xml
+        for the equivalent dark-mode version of this same idea.
+    -->
+    <style name="Theme.Stumps" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F6F8F4</item>
+    </style>
+</resources>

@@ -1,0 +1,24 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build
+/app/release
+*.apk
+*.aab
+/dev-tools/
+
+# Firebase project config — contains this project's API keys/config. Keeping it out of git so
+# it never ends up in a public repo; anyone else building this project needs to drop their own
+# copy at app/google-services.json (from their own Firebase console) before building.
+/app/google-services.json
+
+# Claude Code's own local, per-machine settings — not project source, nothing other
+# contributors need.
+.claude/settings.local.json

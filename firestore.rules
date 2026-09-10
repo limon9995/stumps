@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /live_matches/{matchId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+
+      match /innings/{inningsId} {
+        allow read: if true;
+        allow write: if request.auth != null;
+
+        match /balls/{ballId} {
+          allow read: if true;
+          allow write: if request.auth != null;
+        }
+      }
+    }
+
+    match /clubs/{clubId} {
+      allow read: if true;
+      allow create: if request.auth != null && request.resource.data.createdByUid == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.createdByUid == request.auth.uid;
+    }
+
+    match /tournaments/{tournamentId} {
+      allow read: if true;
+      allow create: if request.auth != null && request.resource.data.organizerUid == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.organizerUid == request.auth.uid;
+
+      // Firestore rules do NOT automatically apply to subcollections of a document that has its
+      // own rule — each nested collection needs its own explicit match block, same as
+      // live_matches/{id}/innings above needed one separate from live_matches/{id} itself.
+      match /teams/{teamId} {
+        allow read: if true;
+        allow write: if request.auth != null;
+      }
+      match /fixtures/{fixtureId} {
+        allow read: if true;
+        allow write: if request.auth != null;
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Stumps</string>
+    <!-- We no longer need a hand-written Web Client ID string here — now that
+         google-services.json has a real "client_type: 3" entry (added after the SHA-1
+         fingerprint was registered in Firebase), the Google Services Gradle plugin
+         auto-generates R.string.default_web_client_id for us at build time, and
+         AuthScreen.kt uses that instead. -->
+</resources>

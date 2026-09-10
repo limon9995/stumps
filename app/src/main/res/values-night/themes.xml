@@ -1,0 +1,18 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!--
+        The dark-mode twin of values/themes.xml — Android automatically picks THIS version
+        instead, only when the PHONE's own system setting is in dark mode, for that same
+        split-second pre-Compose window background. The colour here matches NightBg from
+        ui/theme/Color.kt, so it lines up with what StumpsTheme.kt then draws in dark mode.
+
+        Note: this only reacts to the phone's SYSTEM dark-mode setting, not the in-app
+        Settings > Theme choice (LIGHT/DARK/SYSTEM) — that in-app choice is a Compose-level
+        preference (see ThemePreferenceStore.kt) that Android's plain resource system has no
+        way to see. In practice this means: if someone's phone is in light mode but they pick
+        "Dark" inside the app, there can be a brief light flash before Compose takes over and
+        switches everything to dark — a minor, one-time cold-start detail, not a real bug.
+    -->
+    <style name="Theme.Stumps" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0D1712</item>
+    </style>
+</resources>
