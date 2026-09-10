@@ -19,8 +19,8 @@ android {
         // to actually replace an installed app if the incoming APK's versionCode is the same,
         // even if the actual code inside changed. Bump this number by 1 every time a new debug
         // APK is built and sent, so installing over the old one always genuinely updates it.
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

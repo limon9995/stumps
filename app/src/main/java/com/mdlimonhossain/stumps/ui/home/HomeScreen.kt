@@ -47,6 +47,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -56,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mdlimonhossain.stumps.StumpsApplication
 import com.mdlimonhossain.stumps.data.local.db.UserEntity
+import com.mdlimonhossain.stumps.data.local.db.club.ClubEntity
 import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentEntity
 import com.mdlimonhossain.stumps.ui.designsystem.AppCard
 import com.mdlimonhossain.stumps.ui.designsystem.GradientHeroCard
@@ -86,6 +88,7 @@ fun HomeScreen(
     onWatchLive: () -> Unit,
     onOpenProfile: () -> Unit,
     onOpenClubs: () -> Unit,
+    onOpenClubDetail: (clubId: String) -> Unit,
     onOpenCreateTournament: () -> Unit,
     onOpenRegisterClub: () -> Unit,
     onOpenFollowing: () -> Unit,
@@ -117,6 +120,10 @@ fun HomeScreen(
         )
     )
     val uiState by viewModel.uiState.collectAsState()
+    // The clubs THIS user has registered — read straight off the repository (same simple
+    // pattern ClubScreen.kt itself uses) rather than adding a whole new field to HomeViewModel
+    // just for one rail of cards.
+    val clubs by app.clubRepository.observeClubsForUser(profile.uid).collectAsState(initial = emptyList())
 
     // The side drawer's open/closed state, and a coroutine scope to animate it open when the
     // hamburger button is tapped (opening/closing a drawer is an animation, so it needs a
@@ -222,6 +229,27 @@ fun HomeScreen(
                         onClick = { onOpenTournamentDetail(tournament.id) }
                     )
                     Spacer(Modifier.width(12.dp))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+        SectionHeader(title = "Clubs", onSeeAll = onOpenClubs)
+        Spacer(Modifier.height(10.dp))
+        if (clubs.isEmpty()) {
+            EmptySectionCard(
+                message = "এখনো কোনো ক্লাব রেজিস্টার করা হয়নি",
+                actionLabel = "ক্লাব রেজিস্টার করো",
+                onAction = onOpenRegisterClub
+            )
+        } else {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+                clubs.forEachIndexed { index, club ->
+                    ClubCard(
+                        modifier = Modifier.staggeredEntrance(index).padding(bottom = 12.dp),
+                        club = club,
+                        onClick = { onOpenClubDetail(club.id) }
+                    )
                 }
             }
         }
@@ -401,15 +429,84 @@ private fun androidx.compose.foundation.layout.RowScope.StatColumn(label: String
     }
 }
 
-/** One tournament card in the horizontally-scrolling Tournaments row. */
+/**
+ * One tournament card in the horizontally-scrolling Tournaments row — a colourful gradient
+ * "banner" up top (this app has no tournament-poster upload feature, so a gradient + a big
+ * trophy icon stands in for one, the same idea [ClubCard] uses for its own initials avatar),
+ * then venue, name, and overs — in that order, matching the reference app's card layout.
+ */
 @Composable
 private fun TournamentCard(tournament: TournamentEntity, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    AppCard(modifier = modifier.width(200.dp), onClick = onClick) {
-        Text(text = tournament.name, fontWeight = FontWeight.Bold, maxLines = 2)
-        Spacer(Modifier.height(6.dp))
-        tournament.venue?.let { Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        Spacer(Modifier.height(4.dp))
-        Text(text = "${tournament.oversPerMatch} ওভার প্রতি ম্যাচ", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    AppCard(modifier = modifier.width(200.dp), onClick = onClick, contentPadding = PaddingValues(0.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(90.dp)
+                .background(Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.tertiary, PitchGreen))),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(imageVector = Icons.Filled.Star, contentDescription = null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(36.dp))
+        }
+        Column(modifier = Modifier.padding(16.dp)) {
+            tournament.venue?.let { Text(text = it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Spacer(Modifier.height(4.dp))
+            Text(text = tournament.name, fontWeight = FontWeight.Bold, maxLines = 2)
+            Spacer(Modifier.height(4.dp))
+            Text(text = "${tournament.oversPerMatch} ওভার প্রতি ম্যাচ", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/**
+ * One club row on Home's "Clubs" section — a leading initials avatar, the club's name/city, and
+ * a small coloured badge showing which ball the club plays with (this app doesn't have club
+ * logo photos or a "most recent match" summary line yet, unlike the fuller reference-app card
+ * this is modelled on, so those two pieces are left out rather than faked). Tapping the whole
+ * row opens that club's full detail page.
+ */
+@Composable
+private fun ClubCard(club: ClubEntity, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    AppCard(modifier = modifier.fillMaxWidth(), onClick = onClick) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.size(48.dp).clip(CircleShape).background(PitchGreen),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = club.name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = club.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                Text(text = club.city, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                BallTypeBadge(ballType = club.ballType)
+            }
+        }
+    }
+}
+
+/** A tiny coloured-dot + label badge: red for a leather ball, green/yellow for a tennis ball — matching the two ball colours used everywhere else in the app (wagon wheel, scoring buttons). */
+@Composable
+private fun BallTypeBadge(ballType: String) {
+    val isLeather = ballType == "LEATHER"
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(if (isLeather) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = if (isLeather) "লেদার বল" else "টেনিস বল",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

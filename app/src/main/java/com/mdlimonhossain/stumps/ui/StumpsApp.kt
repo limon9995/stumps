@@ -235,6 +235,7 @@ private fun MainAppNavHost(
                     onWatchLive = { navController.navigate(Destinations.WatchLive) },
                     onOpenProfile = { navController.navigate(Destinations.Profile) },
                     onOpenClubs = { navController.navigate(Destinations.clubs()) },
+                    onOpenClubDetail = { clubId -> navController.navigate(Destinations.clubPreview(clubId)) },
                     onOpenCreateTournament = { navController.navigate(Destinations.tournaments(startWithCreateForm = true)) },
                     onOpenRegisterClub = { navController.navigate(Destinations.clubs(startWithRegisterForm = true)) },
                     onOpenFollowing = { navController.navigate(Destinations.Following) },
