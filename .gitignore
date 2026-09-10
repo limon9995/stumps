@@ -19,6 +19,6 @@ local.properties
 # copy at app/google-services.json (from their own Firebase console) before building.
 /app/google-services.json
 
-# Claude Code's own local, per-machine settings — not project source, nothing other
-# contributors need.
-.claude/settings.local.json
+# Claude Code's own local, per-machine state (settings, scheduled-task lock files, etc.) — not
+# project source, nothing other contributors need, and it's different on each person's machine.
+.claude/

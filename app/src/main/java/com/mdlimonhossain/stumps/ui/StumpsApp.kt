@@ -269,6 +269,7 @@ private fun MainAppNavHost(
                     uid = currentUid,
                     onOpenTournament = { id -> navController.navigate(Destinations.tournamentDetail(id)) },
                     onBack = goHome,
+                    onOpenCreateTeam = { navController.navigate(Destinations.Teams) },
                     startWithCreateForm = backStackEntry.arguments?.getBoolean("startWithCreateForm") ?: false
                 )
             }
@@ -283,7 +284,15 @@ private fun MainAppNavHost(
             }
 
             composable(Destinations.Profile) {
-                ProfileScreen(profile = cachedProfile, onBack = goHome, onSignOut = onSignOut)
+                ProfileScreen(
+                    profile = cachedProfile,
+                    onBack = goHome,
+                    onSignOut = onSignOut,
+                    onStartMatch = { navController.navigate(Destinations.MatchFlow) },
+                    onOpenTeams = { navController.navigate(Destinations.Teams) },
+                    onOpenCreateTournament = { navController.navigate(Destinations.tournaments(startWithCreateForm = true)) },
+                    onOpenRegisterClub = { navController.navigate(Destinations.clubs(startWithRegisterForm = true)) }
+                )
             }
 
             composable(route = Destinations.ClubsRoute, arguments = Destinations.clubsArgs) { backStackEntry ->

@@ -17,10 +17,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.AccountBox
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -44,10 +51,23 @@ import com.mdlimonhossain.stumps.data.export.ShareUtils
 import com.mdlimonhossain.stumps.data.local.db.UserEntity
 import com.mdlimonhossain.stumps.domain.repository.CareerStats
 import com.mdlimonhossain.stumps.ui.common.AnimatedTabChip
+import com.mdlimonhossain.stumps.ui.designsystem.AppCard
+import com.mdlimonhossain.stumps.ui.designsystem.EmptyState
 import com.mdlimonhossain.stumps.ui.theme.PitchGreen
 
-/** Which of the two top-level tabs is showing: the summary view, or the detailed numbers. */
-private enum class ProfileTab { OVERVIEW, STATISTICS }
+/**
+ * Which of the top-level tabs is showing. This list matches the reference app's Profile page —
+ * Overview and Statistics already had real data behind them; the other six are new, and for now
+ * (see each tab's own composable below) show a placeholder "nothing here yet" state with a
+ * button that jumps to where that data would actually get created. Making them show REAL data
+ * (a real list of this player's matches, etc.) is planned as a later, separate pass — it needs
+ * new lookups this app's data layer doesn't have yet, since players are currently just stored as
+ * plain names rather than full linked accounts.
+ */
+private enum class ProfileTab { OVERVIEW, STATISTICS, MATCHES, TEAMS, TOURNAMENTS, CLUBS, INSIGHTS, COMPARE }
+
+/** Batting vs bowling toggle shared by the two new Overview sections below (Yearly Overview, Best Against Team). */
+private enum class BatBowl { BAT, BOWL }
 
 /** Which slice of detailed numbers the Statistics tab is currently showing. */
 private enum class StatCategory { BAT, BOWL, FIELD, MATCH_WISE }
@@ -62,7 +82,14 @@ private enum class StatCategory { BAT, BOWL, FIELD, MATCH_WISE }
 fun ProfileScreen(
     profile: UserEntity?,
     onBack: () -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    // These four all jump the person OUT of their own profile and into wherever that kind of
+    // thing actually gets created — used by the new tabs' empty-state buttons below (e.g.
+    // Matches tab's "Start Match" button, Teams tab's "Create a team" button).
+    onStartMatch: () -> Unit = {},
+    onOpenTeams: () -> Unit = {},
+    onOpenCreateTournament: () -> Unit = {},
+    onOpenRegisterClub: () -> Unit = {}
 ) {
     if (profile == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -85,17 +112,96 @@ fun ProfileScreen(
             TextButton(onClick = onBack) { Text("← ফিরে যাও") }
         }
 
-        // The two-tab pill switcher at the top — AnimatedTabChip fades colours smoothly on tap.
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            AnimatedTabChip(label = "Player Overview", selected = tab == ProfileTab.OVERVIEW, modifier = Modifier.weight(1f)) { tab = ProfileTab.OVERVIEW }
-            AnimatedTabChip(label = "Statistics", selected = tab == ProfileTab.STATISTICS, modifier = Modifier.weight(1f)) { tab = ProfileTab.STATISTICS }
+        // Eight tabs is too many to fit on one phone screen at once, so — same trick already
+        // used for Tournament's own tab row — this scrolls sideways instead of squashing every
+        // label down to be unreadable. AnimatedTabChip fades colours smoothly on tap either way.
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            ProfileTabChip("Player Overview", tab == ProfileTab.OVERVIEW) { tab = ProfileTab.OVERVIEW }
+            ProfileTabChip("Statistics", tab == ProfileTab.STATISTICS) { tab = ProfileTab.STATISTICS }
+            ProfileTabChip("Matches", tab == ProfileTab.MATCHES) { tab = ProfileTab.MATCHES }
+            ProfileTabChip("Teams", tab == ProfileTab.TEAMS) { tab = ProfileTab.TEAMS }
+            ProfileTabChip("Tournaments", tab == ProfileTab.TOURNAMENTS) { tab = ProfileTab.TOURNAMENTS }
+            ProfileTabChip("Clubs", tab == ProfileTab.CLUBS) { tab = ProfileTab.CLUBS }
+            ProfileTabChip("Insights", tab == ProfileTab.INSIGHTS) { tab = ProfileTab.INSIGHTS }
+            ProfileTabChip("Compare", tab == ProfileTab.COMPARE) { tab = ProfileTab.COMPARE }
         }
         Spacer(Modifier.height(20.dp))
 
         when (tab) {
             ProfileTab.OVERVIEW -> OverviewTab(profile, uiState.stats.careerStats, uiState.stats.recentForm, onSignOut)
             ProfileTab.STATISTICS -> StatisticsTab(uiState.stats.statsByFormat, uiState.stats.recentForm)
+            ProfileTab.MATCHES -> EmptyState(
+                icon = Icons.AutoMirrored.Filled.List,
+                title = "No Matches",
+                subtitle = "এখনো কোনো ম্যাচ খেলা হয়নি — নতুন ম্যাচ শুরু করলে এখানে দেখা যাবে।",
+                actionLabel = "Start Match",
+                onAction = onStartMatch
+            )
+            ProfileTab.TEAMS -> EmptyState(
+                icon = Icons.Filled.AccountBox,
+                title = "No Teams",
+                subtitle = "এই খেলোয়াড় এখনো কোনো টিমের অংশ না।",
+                actionLabel = "Create a team",
+                onAction = onOpenTeams
+            )
+            ProfileTab.TOURNAMENTS -> EmptyState(
+                icon = Icons.Filled.Star,
+                title = "No Tournaments",
+                subtitle = "এই খেলোয়াড় যে টুর্নামেন্টগুলোতে অংশ নিয়েছে সেগুলো এখানে দেখা যাবে।",
+                actionLabel = "Create Tournament",
+                onAction = onOpenCreateTournament
+            )
+            ProfileTab.CLUBS -> EmptyState(
+                icon = Icons.Filled.Place,
+                title = "No Clubs",
+                subtitle = "এই খেলোয়াড় এখনো কোনো ক্লাবের ম্যাচে যুক্ত হয়নি।",
+                actionLabel = "Register as club",
+                onAction = onOpenRegisterClub
+            )
+            ProfileTab.INSIGHTS -> EmptyState(
+                icon = Icons.Filled.Star,
+                title = "কোনো Insight এখনো তৈরি হয়নি",
+                subtitle = "আরও ম্যাচ খেললে এখানে ব্যাটিং পজিশন, ফর্ম ট্রেন্ডের মতো গভীর বিশ্লেষণ দেখা যাবে।"
+            )
+            ProfileTab.COMPARE -> CompareTab()
         }
+    }
+}
+
+@Composable
+private fun ProfileTabChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    // Unlike the other tab rows in this app, these chips DON'T stretch to share the available
+    // width evenly (no `Modifier.weight(1f)`) — with 8 of them that would squash every label
+    // down illegibly, so each one is left at its own natural width instead, inside the
+    // horizontally-scrolling row above.
+    AnimatedTabChip(label = label, selected = selected, onClick = onClick)
+}
+
+/** The "Compare" tab: a search box to look up another player, with nobody chosen yet. Actually
+ * comparing two players' numbers side by side needs a player search/lookup this app doesn't
+ * have yet, so for now this only shows the search box itself. */
+@Composable
+private fun CompareTab() {
+    var query by remember { mutableStateOf("") }
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("Search a player to compare") },
+            leadingIcon = { androidx.compose.material3.Icon(imageVector = Icons.Filled.Search, contentDescription = null) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(40.dp))
+        Text(
+            text = "Search a player to compare.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
     }
 }
 
@@ -192,8 +298,97 @@ private fun OverviewTab(profile: UserEntity, stats: CareerStats, recentForm: Lis
             }
         }
 
+        Spacer(Modifier.height(24.dp))
+        YearlyOverviewSection(stats)
+
+        Spacer(Modifier.height(24.dp))
+        BestAgainstTeamSection()
+
         Spacer(Modifier.height(32.dp))
         Button(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) { Text("Logout") }
+    }
+}
+
+/**
+ * "This year so far" vs "Last year" — Batting/Bowling toggle at the top, a two-row table below.
+ * The career stats this app tracks today are all-time totals, with no per-year breakdown yet,
+ * so both rows show zero for now — the layout is real and ready, the year-by-year NUMBERS are a
+ * later, separate piece of work (StatsRepository would need to start recording WHEN each innings
+ * happened, not just the running total).
+ */
+@Composable
+@Suppress("UNUSED_PARAMETER") // kept so the caller (and whoever wires up real year-by-year numbers next) doesn't have to change its call site
+private fun YearlyOverviewSection(stats: CareerStats) {
+    var mode by remember { mutableStateOf(BatBowl.BAT) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(text = "Yearly Overview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        AppCard(modifier = Modifier.fillMaxWidth()) {
+            BatBowlToggle(mode) { mode = it }
+            Spacer(Modifier.height(12.dp))
+            if (mode == BatBowl.BAT) {
+                Row(modifier = Modifier.padding(vertical = 4.dp)) {
+                    com.mdlimonhossain.stumps.ui.tournament.HeaderCell("", 130)
+                    com.mdlimonhossain.stumps.ui.tournament.HeaderCell("Runs", 60)
+                    com.mdlimonhossain.stumps.ui.tournament.HeaderCell("Avg", 60)
+                    com.mdlimonhossain.stumps.ui.tournament.HeaderCell("HS", 50)
+                }
+                YearRow("This Year So Far", "0", "0.0", "0")
+                YearRow("Last Year", "0", "0.0", "0")
+            } else {
+                Row(modifier = Modifier.padding(vertical = 4.dp)) {
+                    com.mdlimonhossain.stumps.ui.tournament.HeaderCell("", 130)
+                    com.mdlimonhossain.stumps.ui.tournament.HeaderCell("Wkts", 60)
+                    com.mdlimonhossain.stumps.ui.tournament.HeaderCell("Avg", 60)
+                    com.mdlimonhossain.stumps.ui.tournament.HeaderCell("Econ", 50)
+                }
+                YearRow("This Year So Far", "0", "0.0", "0.0")
+                YearRow("Last Year", "0", "0.0", "0.0")
+            }
+        }
+    }
+}
+
+@Composable
+private fun YearRow(label: String, col1: String, col2: String, col3: String) {
+    Row(modifier = Modifier.padding(vertical = 8.dp)) {
+        com.mdlimonhossain.stumps.ui.tournament.Cell(label, 130)
+        com.mdlimonhossain.stumps.ui.tournament.Cell(col1, 60)
+        com.mdlimonhossain.stumps.ui.tournament.Cell(col2, 60)
+        com.mdlimonhossain.stumps.ui.tournament.Cell(col3, 50)
+    }
+    HorizontalDivider()
+}
+
+/**
+ * Which opponent team this player has performed best against — Batting/Bowling toggle, one row
+ * per opponent. Same story as [YearlyOverviewSection]: this needs the app to start tracking
+ * figures PER OPPONENT TEAM, which it doesn't yet, so this shows the empty layout only.
+ */
+@Composable
+private fun BestAgainstTeamSection() {
+    var mode by remember { mutableStateOf(BatBowl.BAT) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(text = "Best Against Team", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        AppCard(modifier = Modifier.fillMaxWidth()) {
+            BatBowlToggle(mode) { mode = it }
+            Spacer(Modifier.height(12.dp))
+            EmptyState(
+                icon = Icons.Filled.Star,
+                title = "এখনো কোনো তথ্য নেই",
+                subtitle = "আরও ম্যাচ খেললে এখানে প্রতিপক্ষ টিম অনুযায়ী সেরা পারফরম্যান্স দেখা যাবে।"
+            )
+        }
+    }
+}
+
+/** The small "Batting | Bowling" pill switch reused by both new Overview sections above. */
+@Composable
+private fun BatBowlToggle(mode: BatBowl, onChange: (BatBowl) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AnimatedTabChip(label = "Batting", selected = mode == BatBowl.BAT, modifier = Modifier.weight(1f)) { onChange(BatBowl.BAT) }
+        AnimatedTabChip(label = "Bowling", selected = mode == BatBowl.BOWL, modifier = Modifier.weight(1f)) { onChange(BatBowl.BOWL) }
     }
 }
 

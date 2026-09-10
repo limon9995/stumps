@@ -26,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mdlimonhossain.stumps.StumpsApplication
@@ -40,7 +41,13 @@ import com.mdlimonhossain.stumps.ui.designsystem.staggeredEntrance
  * jump straight into the creation form instead of showing the list first.
  */
 @Composable
-fun TournamentListScreen(uid: String, onOpenTournament: (String) -> Unit, onBack: () -> Unit, startWithCreateForm: Boolean = false) {
+fun TournamentListScreen(
+    uid: String,
+    onOpenTournament: (String) -> Unit,
+    onBack: () -> Unit,
+    onOpenCreateTeam: () -> Unit,
+    startWithCreateForm: Boolean = false
+) {
     val context = LocalContext.current
     val app = context.applicationContext as StumpsApplication
     val viewModel: TournamentListViewModel = viewModel(factory = TournamentListViewModel.Factory(app.tournamentRepository, uid))
@@ -54,6 +61,7 @@ fun TournamentListScreen(uid: String, onOpenTournament: (String) -> Unit, onBack
     if (showCreate) {
         TournamentSetupForm(
             savedTeams = savedTeams,
+            onOpenCreateTeam = onOpenCreateTeam,
             onCancel = { showCreate = false },
             onCreate = { name, overs, venue, teamIds ->
                 viewModel.createTournament(uid, name, overs, venue, teamIds) { id ->
@@ -104,6 +112,7 @@ fun TournamentListScreen(uid: String, onOpenTournament: (String) -> Unit, onBack
 @Composable
 private fun TournamentSetupForm(
     savedTeams: List<TeamEntity>,
+    onOpenCreateTeam: () -> Unit,
     onCancel: () -> Unit,
     onCreate: (name: String, overs: Int, venue: String?, teamIds: List<String>) -> Unit
 ) {
@@ -126,7 +135,22 @@ private fun TournamentSetupForm(
         Spacer(Modifier.height(16.dp))
         Text(text = "অংশগ্রহণকারী টিম বেছে নাও (কমপক্ষে ২টি)", style = MaterialTheme.typography.titleLarge)
         if (savedTeams.isEmpty()) {
-            Text(text = "প্রথমে 'আমার টিম' থেকে টিম বানাও।", style = MaterialTheme.typography.bodyMedium)
+            // The "তৈরি করো" button below stays disabled until at least 2 teams are picked —
+            // but with ZERO saved teams to even pick from, that was easy to miss (just a small
+            // grey line of text). A proper callout with its own button makes the blocker (and
+            // the fix) obvious instead of leaving someone stuck wondering why the button won't
+            // light up.
+            AppCard(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+                Text(text = "এখনো কোনো টিম সেভ করা নেই", fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "টুর্নামেন্টে অংশ নেওয়ার জন্য কমপক্ষে ২টি টিম লাগবে — আগে টিম বানিয়ে নাও।",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onOpenCreateTeam) { Text("টিম বানাও") }
+            }
         }
         // One checkbox row per saved team — tapping either the checkbox or the row toggles
         // whether that team is included.

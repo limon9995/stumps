@@ -14,8 +14,13 @@ android {
         applicationId = "com.mdlimonhossain.stumps"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // Every new build sent to a phone that already has an OLDER version installed needs a
+        // HIGHER versionCode than before — Android (MIUI/HyperOS especially) silently refuses
+        // to actually replace an installed app if the incoming APK's versionCode is the same,
+        // even if the actual code inside changed. Bump this number by 1 every time a new debug
+        // APK is built and sent, so installing over the old one always genuinely updates it.
+        versionCode = 2
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
