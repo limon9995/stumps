@@ -19,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -193,14 +192,17 @@ private fun MainAppNavHost(
     // Reused by every "tab root" screen's own back button (History/Tournaments/Profile), so
     // tapping it always lands back on Home — exactly like it did before this migration —
     // regardless of whether that screen was reached by tapping a bottom-nav tab or a drawer
-    // item. Uses the SAME popUpTo/saveState pattern as the bottom bar's own tab-switching, so
-    // it behaves identically to "the user tapped the Home tab".
+    // item.
+    //
+    // This used to use a fancier popUpTo(...){saveState=true} + restoreState=true pattern (the
+    // same one the bottom bar's own tab-switching still explains in its own comment below) —
+    // but that combination turned out to silently do NOTHING when leaving a screen whose route
+    // has an OPTIONAL argument, like History's "history?matchId={matchId}" (the "Matches" tab).
+    // Home is always the very first, permanent entry at the bottom of this NavHost's back stack
+    // (it's the `startDestination`, and nothing else in this file ever pops it off) — so simply
+    // popping the stack back down to it is both simpler AND actually reliable.
     val goHome: () -> Unit = {
-        navController.navigate(Destinations.Home) {
-            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-            launchSingleTop = true
-            restoreState = true
-        }
+        navController.popBackStack(Destinations.Home, inclusive = false)
     }
 
     Scaffold(

@@ -12,7 +12,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.res.painterResource
 import androidx.navigation.NavDestination.Companion.hierarchy
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.mdlimonhossain.stumps.R
@@ -75,14 +74,20 @@ fun StumpsBottomNavBar(navController: NavHostController) {
                 selected = selected,
                 onClick = {
                     if (!selected) {
-                        navController.navigate(tab.navigateRoute) {
-                            // Jump back to each tab's own "start" screen instead of piling up
-                            // duplicate copies of it every time it's tapped, but remember each
-                            // tab's own scroll position/state so switching back to a tab you've
-                            // already visited returns you exactly where you left it.
-                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
+                        // This used to try to be clever with popUpTo(...){saveState=true} +
+                        // restoreState=true, so switching back to a previously-visited tab would
+                        // return you to wherever you'd scrolled to — but that combination turned
+                        // out to silently do nothing at all when leaving a screen whose route has
+                        // an OPTIONAL argument (the "Matches" tab's `history?matchId={matchId}`),
+                        // which made the whole bottom bar look broken from that screen. Home is
+                        // always the very first, permanent entry at the bottom of the back stack
+                        // (nothing in this app ever pops it off), so popping back down to it —
+                        // then pushing the target tab fresh on top, if it isn't Home itself — is
+                        // simpler and actually reliable, at the small cost of tabs no longer
+                        // remembering their scroll position between visits.
+                        navController.popBackStack(Destinations.Home, inclusive = false)
+                        if (tab.navigateRoute != Destinations.Home) {
+                            navController.navigate(tab.navigateRoute) { launchSingleTop = true }
                         }
                     }
                 },
