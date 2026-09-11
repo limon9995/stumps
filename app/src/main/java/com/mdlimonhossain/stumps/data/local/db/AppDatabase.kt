@@ -50,7 +50,7 @@ import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentTeamEntity
         ClubEntity::class,
         FollowEntity::class
     ],
-    version = 5, // bumped from 4 when players.isCaptain/isViceCaptain were added
+    version = 6, // bumped from 5 when tournaments.clubName/city/season/startDate/endDate/ballType were added
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -105,6 +105,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Adds the Create Tournament form's new fields (club/city/season/dates/ball type) — all
+        // nullable, so every tournament created before this pass just gets NULL for each.
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN clubName TEXT")
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN city TEXT")
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN season TEXT")
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN startDate INTEGER")
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN endDate INTEGER")
+                db.execSQL("ALTER TABLE tournaments ADD COLUMN ballType TEXT")
+            }
+        }
+
         // We only ever want ONE database connection open at a time for the whole app — opening
         // multiple would waste memory and could cause weird bugs. @Volatile + synchronized here
         // is a standard Kotlin/Java pattern called a "singleton": the first time getInstance is
@@ -119,7 +132,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "stumps.db" // the actual filename this gets saved as on the phone's storage
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     // A real migration now exists for every version bump so far (see above). This
                     // destructive fallback only kicks in for a version jump nobody's written a
                     // migration for yet — every NEW schema change from here on should add its own

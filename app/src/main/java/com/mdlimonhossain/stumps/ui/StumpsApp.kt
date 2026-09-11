@@ -295,7 +295,6 @@ private fun MainAppNavHost(
                     uid = currentUid,
                     onOpenTournament = { id -> navController.navigate(Destinations.tournamentDetail(id)) },
                     onBack = goHome,
-                    onOpenCreateTeam = { navController.navigate(Destinations.Teams) },
                     startWithCreateForm = backStackEntry.arguments?.getBoolean("startWithCreateForm") ?: false
                 )
             }
@@ -305,7 +304,8 @@ private fun MainAppNavHost(
                 TournamentDetailScreen(
                     tournamentId = tournamentId,
                     organizerUid = currentUid,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    onOpenCreateTeam = { navController.navigate(Destinations.Teams) }
                 )
             }
 

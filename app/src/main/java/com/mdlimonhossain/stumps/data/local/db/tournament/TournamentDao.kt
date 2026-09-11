@@ -1,6 +1,7 @@
 package com.mdlimonhossain.stumps.data.local.db.tournament
 
 import androidx.room.Dao
+import androidx.room.Delete
 import androidx.room.Query
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
@@ -11,6 +12,13 @@ import kotlinx.coroutines.flow.Flow
 interface TournamentDao {
     @Upsert
     suspend fun upsert(tournament: TournamentEntity)
+
+    // Used by the tournament detail screen's "More" menu delete option. The tournament's own
+    // team-entry/fixture rows are left behind as harmless orphans (same trade-off TeamDao.delete
+    // already makes for a deleted team's players) — nothing queries them by a tournamentId that
+    // no longer has a matching tournament row.
+    @Delete
+    suspend fun delete(tournament: TournamentEntity)
 
     @Query("SELECT * FROM tournaments WHERE organizerUid = :uid ORDER BY createdAt DESC")
     fun observeForUser(uid: String): Flow<List<TournamentEntity>>

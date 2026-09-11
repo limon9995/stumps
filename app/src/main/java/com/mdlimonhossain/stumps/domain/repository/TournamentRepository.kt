@@ -25,11 +25,28 @@ import java.util.UUID
  * team's roster, and finally work out the points table and leaderboards.
  */
 
-/** One row of a leaderboard: a player's name and their total (runs for Orange Cap, wickets for Purple Cap). */
+/** One row of a leaderboard: a player's name and their total (runs for Orange Cap, wickets for Purple Cap, etc). */
 data class LeaderboardEntry(val playerName: String, val value: Int)
 
-/** Orange Cap = the tournament's top run-scorer. Purple Cap = the tournament's top wicket-taker. Same idea as the IPL awards. */
-data class TournamentLeaderboards(val orangeCap: List<LeaderboardEntry>, val purpleCap: List<LeaderboardEntry>)
+/** A single best-innings bowling figure, e.g. "Rahim — 4/18". */
+data class BestBowlingEntry(val playerName: String, val wickets: Int, val runsConceded: Int)
+
+/**
+ * Orange Cap = the tournament's top run-scorer. Purple Cap = the tournament's top wicket-taker.
+ * Same idea as the IPL awards. `highestScore`/`bestBowling` are the best SINGLE-INNINGS figures
+ * (not summed across the whole tournament, unlike orangeCap/purpleCap) — the same "biggest one
+ * innings" idea as CareerStats.highScore/bestBowlingFigures elsewhere in this app.
+ */
+data class TournamentLeaderboards(
+    val orangeCap: List<LeaderboardEntry>,
+    val purpleCap: List<LeaderboardEntry>,
+    val highestScore: LeaderboardEntry? = null,
+    val bestBowling: BestBowlingEntry? = null,
+    val mostSixes: List<LeaderboardEntry> = emptyList(),
+    val mostFours: List<LeaderboardEntry> = emptyList(),
+    val mostCatches: List<LeaderboardEntry> = emptyList(),
+    val mostStumpings: List<LeaderboardEntry> = emptyList()
+)
 
 class TournamentRepository(
     private val tournamentDao: TournamentDao,
@@ -81,7 +98,13 @@ class TournamentRepository(
             oversPerMatch = (getLong("oversPerMatch") ?: 0L).toInt(),
             venue = getString("venue"),
             organizerUid = getString("organizerUid") ?: "",
-            createdAt = getLong("createdAt") ?: 0L
+            createdAt = getLong("createdAt") ?: 0L,
+            clubName = getString("clubName"),
+            city = getString("city"),
+            season = getString("season"),
+            startDate = getLong("startDate"),
+            endDate = getLong("endDate"),
+            ballType = getString("ballType")
         )
     }
 
@@ -89,19 +112,31 @@ class TournamentRepository(
      * Sets up a brand new tournament: saves the tournament itself, remembers which teams are
      * taking part, and automatically builds the full match schedule (every team plays every
      * other team once — see TournamentEngine.generateRoundRobinFixtures for the actual math).
+     * `selectedTeamIds` defaults to empty — the newer "create tournament" form only asks for the
+     * tournament's own details (name/club/city/season/dates/ball type), and lets teams be added
+     * afterwards, one at a time, from the tournament's own Teams tab (see addTeamToTournament
+     * below) instead of all at once during creation.
      */
     suspend fun createTournament(
         organizerUid: String,
         name: String,
         oversPerMatch: Int,
         venue: String?,
-        selectedTeamIds: List<String>
+        selectedTeamIds: List<String> = emptyList(),
+        clubName: String? = null,
+        city: String? = null,
+        season: String? = null,
+        startDate: Long? = null,
+        endDate: Long? = null,
+        ballType: String? = null
     ): String {
         val tournamentId = UUID.randomUUID().toString()
         val tournament = TournamentEntity(
             id = tournamentId, name = name, format = "ROUND_ROBIN",
             oversPerMatch = oversPerMatch, venue = venue,
-            organizerUid = organizerUid, createdAt = System.currentTimeMillis()
+            organizerUid = organizerUid, createdAt = System.currentTimeMillis(),
+            clubName = clubName, city = city, season = season,
+            startDate = startDate, endDate = endDate, ballType = ballType
         )
         tournamentDao.upsert(tournament)
         // Best-effort push to the shared cloud directory (see the class doc comment) — a failed
@@ -115,7 +150,13 @@ class TournamentRepository(
                     "oversPerMatch" to tournament.oversPerMatch,
                     "venue" to tournament.venue,
                     "organizerUid" to tournament.organizerUid,
-                    "createdAt" to tournament.createdAt
+                    "createdAt" to tournament.createdAt,
+                    "clubName" to tournament.clubName,
+                    "city" to tournament.city,
+                    "season" to tournament.season,
+                    "startDate" to tournament.startDate,
+                    "endDate" to tournament.endDate,
+                    "ballType" to tournament.ballType
                 )
             ).await()
         }
@@ -159,6 +200,68 @@ class TournamentRepository(
         fixtureDao.upsertAll(fixtures)
         runCatching { fixtures.forEach { pushFixtureToCloud(tournamentId, it) } }
         return tournamentId
+    }
+
+    /**
+     * Adds ONE more saved team to an already-existing tournament — used by the Teams tab's "ADD
+     * TEAM" flow. Rather than regenerating the WHOLE fixture list from scratch (which could
+     * disturb fixtures that already have a matchId, i.e. already-played or in-progress matches),
+     * this only creates the new fixtures this addition actually needs: the new team playing every
+     * team that was ALREADY in the tournament, exactly once each. Every existing fixture between
+     * two OLD teams is left completely untouched.
+     */
+    suspend fun addTeamToTournament(tournamentId: String, teamId: String) {
+        val existingTeams = tournamentTeamDao.getForTournamentOnce(tournamentId)
+        if (existingTeams.any { it.teamId == teamId }) return // already in this tournament — nothing to do
+        val teamName = teamRepository.getTeamOnce(teamId)?.name ?: return
+
+        val newTeamRow = TournamentTeamEntity(UUID.randomUUID().toString(), tournamentId, teamId, teamName)
+        tournamentTeamDao.upsertAll(listOf(newTeamRow))
+        runCatching {
+            cloudTournamentTeamsRef(tournamentId).document(newTeamRow.id).set(
+                mapOf("teamId" to teamId, "teamName" to teamName)
+            ).await()
+        }
+
+        val existingFixtures = fixtureDao.getForTournamentOnce(tournamentId)
+        val nextRound = (existingFixtures.maxOfOrNull { it.round } ?: 0) + 1
+        val newFixtures = existingTeams.map { other ->
+            TournamentFixtureEntity(id = UUID.randomUUID().toString(), tournamentId = tournamentId, round = nextRound, teamAId = teamId, teamBId = other.teamId)
+        }
+        if (newFixtures.isNotEmpty()) {
+            fixtureDao.upsertAll(newFixtures)
+            runCatching { newFixtures.forEach { pushFixtureToCloud(tournamentId, it) } }
+        }
+    }
+
+    /** Renames a tournament — used by the Home tab's "More" menu. */
+    suspend fun renameTournament(tournament: TournamentEntity, newName: String) {
+        tournamentDao.upsert(tournament.copy(name = newName))
+    }
+
+    /** Permanently deletes a tournament — used by the Home tab's "More" menu. */
+    suspend fun deleteTournament(tournament: TournamentEntity) {
+        tournamentDao.delete(tournament)
+    }
+
+    /**
+     * Total sixes and fours hit across EVERY finished match in this tournament — the Home tab's
+     * "Tournament Boundaries" numbers. Walks each finished fixture's ball-by-ball log once; same
+     * "replay everything, don't store a running total" approach used throughout this app.
+     */
+    suspend fun computeBoundaryCounts(tournamentId: String): Pair<Int, Int> {
+        var sixes = 0
+        var fours = 0
+        for (fixture in fixtureDao.getForTournamentOnce(tournamentId)) {
+            val matchId = fixture.matchId ?: continue
+            for (summary in matchRepository.getFinalInningsStates(matchId)) {
+                for (ball in summary.ballLog) {
+                    if (ball.runsOffBat == 6) sixes++
+                    if (ball.runsOffBat == 4) fours++
+                }
+            }
+        }
+        return sixes to fours
     }
 
     private fun cloudTournamentTeamsRef(tournamentId: String) = cloudTournamentsRef().document(tournamentId).collection("teams")
@@ -301,28 +404,60 @@ class TournamentRepository(
     }
 
     /**
-     * Adds up every player's runs and wickets across ALL finished matches in this tournament,
-     * then returns the top 10 for each — that's the Orange Cap (runs) and Purple Cap (wickets).
+     * Adds up every player's runs/wickets/sixes/fours/catches/stumpings across ALL finished
+     * matches in this tournament (Orange Cap, Purple Cap, and the rest of the Statistics tab's
+     * card grid), plus tracks the single best batting innings (Highest Score) and single best
+     * bowling innings (Best Bowling) seen anywhere in the tournament.
      */
     suspend fun computeLeaderboards(tournamentId: String): TournamentLeaderboards {
         val fixtures = fixtureDao.getForTournamentOnce(tournamentId).filter { it.matchId != null }
         // Plain maps we build up by hand: player name -> their running total so far.
         val runs = mutableMapOf<String, Int>()
         val wickets = mutableMapOf<String, Int>()
+        val sixes = mutableMapOf<String, Int>()
+        val fours = mutableMapOf<String, Int>()
+        val catches = mutableMapOf<String, Int>()
+        val stumpings = mutableMapOf<String, Int>()
+        var highestScore: LeaderboardEntry? = null
+        var bestBowling: BestBowlingEntry? = null
 
         for (fixture in fixtures) {
             val matchId = fixture.matchId ?: continue
             for (summary in matchRepository.getFinalInningsStates(matchId)) {
                 // Add this match's figures on top of whatever the player already had.
-                summary.state.batsmanFigures.forEach { (name, fig) -> runs[name] = (runs[name] ?: 0) + fig.runs }
-                summary.state.bowlerFigures.forEach { (name, fig) -> wickets[name] = (wickets[name] ?: 0) + fig.wickets }
+                summary.state.batsmanFigures.forEach { (name, fig) ->
+                    runs[name] = (runs[name] ?: 0) + fig.runs
+                    sixes[name] = (sixes[name] ?: 0) + fig.sixes
+                    fours[name] = (fours[name] ?: 0) + fig.fours
+                    if (highestScore == null || fig.runs > highestScore!!.value) highestScore = LeaderboardEntry(name, fig.runs)
+                }
+                summary.state.bowlerFigures.forEach { (name, fig) ->
+                    wickets[name] = (wickets[name] ?: 0) + fig.wickets
+                    // "Best" = most wickets first, then fewest runs conceded as a tie-breaker —
+                    // same rule CareerStats.withBowling uses for a player's own career-best.
+                    val current = bestBowling
+                    val isNewBest = current == null || fig.wickets > current.wickets ||
+                        (fig.wickets == current.wickets && fig.runsConceded < current.runsConceded)
+                    if (isNewBest) bestBowling = BestBowlingEntry(name, fig.wickets, fig.runsConceded)
+                }
+                summary.state.fieldingFigures.forEach { (name, fig) ->
+                    catches[name] = (catches[name] ?: 0) + fig.catches
+                    stumpings[name] = (stumpings[name] ?: 0) + fig.stumpings
+                }
             }
         }
 
-        // Sort both maps highest-first and keep only the top 10 for each leaderboard.
+        // Sort every map highest-first and keep only the top 10 for each leaderboard.
+        fun top10(map: Map<String, Int>) = map.entries.sortedByDescending { it.value }.take(10).map { LeaderboardEntry(it.key, it.value) }
         return TournamentLeaderboards(
-            orangeCap = runs.entries.sortedByDescending { it.value }.take(10).map { LeaderboardEntry(it.key, it.value) },
-            purpleCap = wickets.entries.sortedByDescending { it.value }.take(10).map { LeaderboardEntry(it.key, it.value) }
+            orangeCap = top10(runs),
+            purpleCap = top10(wickets),
+            highestScore = highestScore,
+            bestBowling = bestBowling,
+            mostSixes = top10(sixes),
+            mostFours = top10(fours),
+            mostCatches = top10(catches),
+            mostStumpings = top10(stumpings)
         )
     }
 

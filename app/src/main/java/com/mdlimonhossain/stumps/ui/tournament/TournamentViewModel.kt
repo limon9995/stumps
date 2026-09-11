@@ -20,10 +20,26 @@ class TournamentListViewModel(private val repository: TournamentRepository, uid:
     val tournaments: StateFlow<List<TournamentEntity>> = repository.observeTournamentsForUser(uid)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** Called when the "নতুন টুর্নামেন্ট" (new tournament) form is submitted. */
-    fun createTournament(uid: String, name: String, overs: Int, venue: String?, teamIds: List<String>, onCreated: (String) -> Unit) {
+    /** Called when the "নতুন টুর্নামেন্ট" (new tournament) form is submitted. Teams are no longer picked here — they're added afterwards from the new tournament's own Teams tab (see TournamentDetailScreen.kt). */
+    fun createTournament(
+        uid: String,
+        name: String,
+        overs: Int,
+        venue: String?,
+        clubName: String?,
+        city: String?,
+        season: String?,
+        startDate: Long?,
+        endDate: Long?,
+        ballType: String?,
+        onCreated: (String) -> Unit
+    ) {
         viewModelScope.launch {
-            val id = repository.createTournament(uid, name, overs, venue, teamIds)
+            val id = repository.createTournament(
+                organizerUid = uid, name = name, oversPerMatch = overs, venue = venue,
+                clubName = clubName, city = city, season = season,
+                startDate = startDate, endDate = endDate, ballType = ballType
+            )
             onCreated(id)
         }
     }
@@ -55,14 +71,42 @@ class TournamentDetailViewModel(private val repository: TournamentRepository, to
     private val _leaderboards = MutableStateFlow(TournamentLeaderboards(emptyList(), emptyList()))
     val leaderboards: StateFlow<TournamentLeaderboards> = _leaderboards
 
+    // Same "calculate on demand, don't keep a live Flow" reasoning as standings/leaderboards
+    // above — the Home tab's "Tournament Boundaries" numbers.
+    private val _boundaryCounts = MutableStateFlow(0 to 0) // sixes to fours
+    val boundaryCounts: StateFlow<Pair<Int, Int>> = _boundaryCounts
+
     /** Recalculates the points table right now and updates `standings` with the fresh result. */
     fun refreshStandings(tournamentId: String) {
         viewModelScope.launch { _standings.value = repository.computeStandings(tournamentId) }
     }
 
-    /** Recalculates Orange Cap / Purple Cap right now and updates `leaderboards` with the fresh result. */
+    /** Recalculates Orange Cap / Purple Cap (and the rest of the Statistics card grid) right now and updates `leaderboards` with the fresh result. */
     fun refreshLeaderboards(tournamentId: String) {
         viewModelScope.launch { _leaderboards.value = repository.computeLeaderboards(tournamentId) }
+    }
+
+    /** Recalculates total sixes/fours hit so far in this tournament. */
+    fun refreshBoundaryCounts(tournamentId: String) {
+        viewModelScope.launch { _boundaryCounts.value = repository.computeBoundaryCounts(tournamentId) }
+    }
+
+    /** Adds one more of the organizer's own saved teams to this tournament — see TournamentRepository.addTeamToTournament. */
+    fun addTeam(tournamentId: String, teamId: String) {
+        viewModelScope.launch { repository.addTeamToTournament(tournamentId, teamId) }
+    }
+
+    /** Renames this tournament — used by the Home tab's "More" menu. */
+    fun rename(tournament: TournamentEntity, newName: String) {
+        viewModelScope.launch { repository.renameTournament(tournament, newName) }
+    }
+
+    /** Permanently deletes this tournament, then calls `onDeleted` (the caller navigates back). */
+    fun delete(tournament: TournamentEntity, onDeleted: () -> Unit) {
+        viewModelScope.launch {
+            repository.deleteTournament(tournament)
+            onDeleted()
+        }
     }
 
     /** See AuthViewModel.Factory for what a Factory is and why. */

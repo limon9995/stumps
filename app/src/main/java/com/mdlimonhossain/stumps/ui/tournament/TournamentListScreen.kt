@@ -1,6 +1,7 @@
 package com.mdlimonhossain.stumps.ui.tournament
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,20 +10,27 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -34,14 +42,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mdlimonhossain.stumps.StumpsApplication
-import com.mdlimonhossain.stumps.data.local.db.match.TeamEntity
 import com.mdlimonhossain.stumps.ui.designsystem.AppCard
 import com.mdlimonhossain.stumps.ui.designsystem.EmptyState
 import com.mdlimonhossain.stumps.ui.designsystem.staggeredEntrance
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 /**
  * The tournament list screen: every tournament this user runs, plus a form to create a new one.
@@ -53,26 +63,23 @@ fun TournamentListScreen(
     uid: String,
     onOpenTournament: (String) -> Unit,
     onBack: () -> Unit,
-    onOpenCreateTeam: () -> Unit,
     startWithCreateForm: Boolean = false
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as StumpsApplication
     val viewModel: TournamentListViewModel = viewModel(factory = TournamentListViewModel.Factory(app.tournamentRepository, uid))
     val tournaments by viewModel.tournaments.collectAsState()
-    // Saved teams are needed for the "pick participating teams" step of the create form —
-    // reading them straight from the repository here rather than via a ViewModel, since this
-    // screen only needs a simple read, not any special handling.
-    val savedTeams by app.teamRepository.observeTeamsForUser(uid).collectAsState(initial = emptyList())
+    // If the organizer has a registered club, its name/city/ball-type pre-fill the create form —
+    // same idea as the reference app showing "Limon's Club" already typed in.
+    val myClubs by app.clubRepository.observeClubsForUser(uid).collectAsState(initial = emptyList())
     var showCreate by remember { mutableStateOf(startWithCreateForm) }
 
     if (showCreate) {
         TournamentSetupForm(
-            savedTeams = savedTeams,
-            onOpenCreateTeam = onOpenCreateTeam,
+            myClub = myClubs.firstOrNull(),
             onCancel = { showCreate = false },
-            onCreate = { name, overs, venue, teamIds ->
-                viewModel.createTournament(uid, name, overs, venue, teamIds) { id ->
+            onCreate = { name, overs, venue, clubName, city, season, startDate, endDate, ballType ->
+                viewModel.createTournament(uid, name, overs, venue, clubName, city, season, startDate, endDate, ballType) { id ->
                     showCreate = false
                     onOpenTournament(id) // jump straight into the new tournament once it's created
                 }
@@ -126,7 +133,8 @@ fun TournamentListScreen(
                             )
                         }
                         Column(modifier = Modifier.padding(16.dp)) {
-                            t.venue?.let { Text(text = it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            val subtitle = listOfNotNull(t.clubName, t.city).joinToString(", ").ifBlank { t.venue }
+                            subtitle?.let { Text(text = it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                             Spacer(Modifier.height(4.dp))
                             Text(text = t.name, style = MaterialTheme.typography.titleLarge)
                             Spacer(Modifier.height(4.dp))
@@ -139,75 +147,167 @@ fun TournamentListScreen(
     }
 }
 
-/** The "create a new tournament" form: name, overs, venue, and picking which saved teams take part. */
+/**
+ * The "create a new tournament" form — matches the reference app's field set: name, club/
+ * organisation, city, season/year, an optional start/end date, and a ball type. Deciding which
+ * TEAMS take part no longer happens here — that's now done afterwards, one team at a time, from
+ * the new tournament's own Teams tab (see TournamentDetailScreen.kt), the same "structure first,
+ * fill in the roster afterwards" pattern already used for creating a saved team.
+ * "প্রতি ম্যাচে ওভার" (overs per match) stays on this form even though the reference app doesn't
+ * show it here — every match in this app's tournaments shares one overs limit, and there's
+ * nowhere else in this simpler flow to ask for it.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TournamentSetupForm(
-    savedTeams: List<TeamEntity>,
-    onOpenCreateTeam: () -> Unit,
+    myClub: com.mdlimonhossain.stumps.data.local.db.club.ClubEntity?,
     onCancel: () -> Unit,
-    onCreate: (name: String, overs: Int, venue: String?, teamIds: List<String>) -> Unit
+    onCreate: (
+        name: String, overs: Int, venue: String?, clubName: String?, city: String?,
+        season: String?, startDate: Long?, endDate: Long?, ballType: String?
+    ) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
+    var clubName by remember { mutableStateOf(myClub?.name ?: "") }
+    var city by remember { mutableStateOf(myClub?.city ?: "") }
+    var season by remember { mutableStateOf("") }
     var oversText by remember { mutableStateOf("20") }
     var venue by remember { mutableStateOf("") }
-    // A Set of the currently-checked team ids — using a Set (not a List) makes "is this team
-    // checked?" and "toggle this team" both quick and simple to write.
-    val selected = remember { mutableStateOf(setOf<String>()) }
+    var ballType by remember { mutableStateOf(myClub?.ballType ?: "LEATHER") }
+    var startDateMillis by remember { mutableStateOf<Long?>(null) }
+    var endDateMillis by remember { mutableStateOf<Long?>(null) }
+    var showSeasonPicker by remember { mutableStateOf(false) }
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+    val dateFormat = remember { SimpleDateFormat("d MMM yyyy", Locale.getDefault()) }
+
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         Text(text = "নতুন টুর্নামেন্ট", style = MaterialTheme.typography.headlineLarge)
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("টুর্নামেন্টের নাম") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(value = clubName, onValueChange = { clubName = it }, label = { Text("ক্লাব / সংগঠনের নাম") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(value = city, onValueChange = { city = it }, label = { Text("শহর") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = season,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("সিজন / বছর") },
+            placeholder = { Text("বেছে নাও") },
+            modifier = Modifier.fillMaxWidth().clickable { showSeasonPicker = true }
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = startDateMillis?.let { dateFormat.format(Date(it)) } ?: "",
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("শুরুর তারিখ") },
+                modifier = Modifier.weight(1f).clickable { showStartPicker = true }
+            )
+            Spacer(Modifier.width(8.dp))
+            OutlinedTextField(
+                value = endDateMillis?.let { dateFormat.format(Date(it)) } ?: "",
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("শেষের তারিখ") },
+                modifier = Modifier.weight(1f).clickable { showEndPicker = true }
+            )
+        }
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(value = oversText, onValueChange = { oversText = it }, label = { Text("প্রতি ম্যাচে কত ওভার") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(value = venue, onValueChange = { venue = it }, label = { Text("ভেন্যু (ঐচ্ছিক)") }, modifier = Modifier.fillMaxWidth())
 
         Spacer(Modifier.height(16.dp))
-        Text(text = "অংশগ্রহণকারী টিম বেছে নাও (কমপক্ষে ২টি)", style = MaterialTheme.typography.titleLarge)
-        if (savedTeams.isEmpty()) {
-            // The "তৈরি করো" button below stays disabled until at least 2 teams are picked —
-            // but with ZERO saved teams to even pick from, that was easy to miss (just a small
-            // grey line of text). A proper callout with its own button makes the blocker (and
-            // the fix) obvious instead of leaving someone stuck wondering why the button won't
-            // light up.
-            AppCard(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-                Text(text = "এখনো কোনো টিম সেভ করা নেই", fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "টুর্নামেন্টে অংশ নেওয়ার জন্য কমপক্ষে ২টি টিম লাগবে — আগে টিম বানিয়ে নাও।",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = onOpenCreateTeam) { Text("টিম বানাও") }
-            }
-        }
-        // One checkbox row per saved team — tapping either the checkbox or the row toggles
-        // whether that team is included.
-        savedTeams.forEach { team ->
-            val isSelected = selected.value.contains(team.id)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .selectable(selected = isSelected, onClick = {
-                        // Add or remove this team's id from the selected set.
-                        selected.value = if (isSelected) selected.value - team.id else selected.value + team.id
-                    })
-            ) {
-                Checkbox(checked = isSelected, onCheckedChange = null) // null here because the Row above already handles the tap
-                Text(text = team.name, modifier = Modifier.padding(top = 12.dp))
-            }
+        Text(text = "বলের ধরন", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        Row {
+            com.mdlimonhossain.stumps.ui.common.AnimatedTabChip(
+                label = "লেদার বল", selected = ballType == "LEATHER", modifier = Modifier.weight(1f)
+            ) { ballType = "LEATHER" }
+            Spacer(Modifier.width(8.dp))
+            com.mdlimonhossain.stumps.ui.common.AnimatedTabChip(
+                label = "টেনিস বল", selected = ballType == "TENNIS", modifier = Modifier.weight(1f)
+            ) { ballType = "TENNIS" }
         }
 
         Spacer(Modifier.height(20.dp))
         val overs = oversText.toIntOrNull() ?: 0
         Button(
-            enabled = name.isNotBlank() && overs > 0 && selected.value.size >= 2, // need a name, real overs, and at least 2 teams
-            onClick = { onCreate(name, overs, venue.ifBlank { null }, selected.value.toList()) },
+            enabled = name.isNotBlank() && clubName.isNotBlank() && city.isNotBlank() && season.isNotBlank() && overs > 0,
+            onClick = {
+                onCreate(
+                    name, overs, venue.ifBlank { null }, clubName.ifBlank { null }, city.ifBlank { null },
+                    season.ifBlank { null }, startDateMillis, endDateMillis, ballType
+                )
+            },
             modifier = Modifier.fillMaxWidth()
         ) { Text("টুর্নামেন্ট তৈরি করো") }
         Spacer(Modifier.height(8.dp))
         TextButton(onClick = onCancel) { Text("বাতিল") }
     }
+
+    if (showSeasonPicker) {
+        SeasonPickerDialog(
+            selected = season,
+            onDismiss = { showSeasonPicker = false },
+            onPick = { season = it; showSeasonPicker = false }
+        )
+    }
+    if (showStartPicker) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = startDateMillis)
+        DatePickerDialog(
+            onDismissRequest = { showStartPicker = false },
+            confirmButton = { TextButton(onClick = { startDateMillis = state.selectedDateMillis; showStartPicker = false }) { Text("ঠিক আছে") } },
+            dismissButton = { TextButton(onClick = { showStartPicker = false }) { Text("বাতিল") } }
+        ) { DatePicker(state = state) }
+    }
+    if (showEndPicker) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = endDateMillis)
+        DatePickerDialog(
+            onDismissRequest = { showEndPicker = false },
+            confirmButton = { TextButton(onClick = { endDateMillis = state.selectedDateMillis; showEndPicker = false }) { Text("ঠিক আছে") } },
+            dismissButton = { TextButton(onClick = { showEndPicker = false }) { Text("বাতিল") } }
+        ) { DatePicker(state = state) }
+    }
+}
+
+/**
+ * A scrollable list of season labels to choose from, e.g. "2026-27" or "2026" — matches the
+ * reference app's picker. Built fresh from today's actual calendar year every time (rather than
+ * a hardcoded list), so it never quietly goes stale as real years pass.
+ */
+@Composable
+private fun SeasonPickerDialog(selected: String, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    val currentYear = remember { Calendar.getInstance().get(Calendar.YEAR) }
+    val options = remember {
+        buildList {
+            add("${currentYear + 1}")
+            for (y in currentYear downTo currentYear - 5) {
+                add("$y-${((y + 1) % 100).toString().padStart(2, '0')}")
+                add("$y")
+            }
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("সিজন / বছর বেছে নাও") },
+        text = {
+            Column(modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                options.forEach { option ->
+                    Text(
+                        text = "Year $option",
+                        color = if (option == selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        fontWeight = if (option == selected) androidx.compose.ui.text.font.FontWeight.Bold else null,
+                        modifier = Modifier.fillMaxWidth().clickable { onPick(option) }.padding(vertical = 12.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("বন্ধ করো") } }
+    )
 }
