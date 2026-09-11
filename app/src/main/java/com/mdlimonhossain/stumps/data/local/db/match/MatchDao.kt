@@ -18,6 +18,13 @@ interface TeamDao {
     @Upsert
     suspend fun upsert(team: TeamEntity)
 
+    // Used by Team Settings' delete button — permanently removes this team (its saved players
+    // stay in the database as orphaned rows, same trade-off MatchRepository already makes
+    // elsewhere in this app for simplicity, since a deleted team's players aren't shown anywhere
+    // once the team itself is gone).
+    @Delete
+    suspend fun delete(team: TeamEntity)
+
     // Every team belonging to one user, alphabetically — shown on the "আমার টিম" screen.
     @Query("SELECT * FROM teams WHERE createdByUid = :uid ORDER BY name")
     fun observeTeamsForUser(uid: String): Flow<List<TeamEntity>>

@@ -34,9 +34,13 @@ import com.mdlimonhossain.stumps.ui.designsystem.ListItemCard
 import com.mdlimonhossain.stumps.ui.designsystem.staggeredEntrance
 import kotlinx.coroutines.launch
 
-/** The "আমার টিম" (my teams) screen: a list of saved teams, plus a form to create a new one. */
+/**
+ * The "আমার টিম" (my teams) screen: a list of saved teams, plus a form to create a new one.
+ * `onOpenTeam` is called with a team's id when its card is tapped, so the caller (StumpsApp's
+ * NavHost) can navigate into that team's own detail page (see TeamDetailScreen.kt).
+ */
 @Composable
-fun TeamManagementScreen(uid: String, onBack: () -> Unit) {
+fun TeamManagementScreen(uid: String, onBack: () -> Unit, onOpenTeam: (teamId: String) -> Unit = {}) {
     val context = LocalContext.current
     val app = context.applicationContext as StumpsApplication
     val viewModel: TeamManagementViewModel = viewModel(factory = TeamManagementViewModel.Factory(app.teamRepository, uid))
@@ -46,7 +50,9 @@ fun TeamManagementScreen(uid: String, onBack: () -> Unit) {
     if (showCreate) {
         CreateTeamForm(
             onCancel = { showCreate = false },
-            onCreate = { name, players -> viewModel.createTeam(uid, name, players) { showCreate = false } }
+            // Once the team is saved, jump straight into its (still-empty) detail page so the
+            // user can start adding players right away, instead of landing back on the list.
+            onCreate = { name, location -> viewModel.createTeam(uid, name, location) { teamId -> showCreate = false; onOpenTeam(teamId) } }
         )
         return // stop here — don't also draw the list below while the form is showing
     }
@@ -74,16 +80,20 @@ fun TeamManagementScreen(uid: String, onBack: () -> Unit) {
                 // `key = { it.id }` helps Compose tell rows apart efficiently when the list
                 // changes, instead of just relying on their position in the list.
                 itemsIndexed(teams, key = { _, t -> t.id }) { index, team ->
-                    TeamRow(uid = uid, team = team, modifier = Modifier.staggeredEntrance(index))
+                    TeamRow(uid = uid, team = team, modifier = Modifier.staggeredEntrance(index), onClick = { onOpenTeam(team.id) })
                 }
             }
         }
     }
 }
 
-/** One team card, with its own Follow/Unfollow button — same pattern as ClubScreen's ClubRow. */
+/**
+ * One team card. Tapping the row itself opens that team's detail page (`onClick`); the trailing
+ * Follow/Unfollow button is its own separate tap target so following a team doesn't accidentally
+ * also navigate away — same pattern as ClubScreen's ClubRow.
+ */
 @Composable
-private fun TeamRow(uid: String, team: TeamEntity, modifier: Modifier = Modifier) {
+private fun TeamRow(uid: String, team: TeamEntity, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as StumpsApplication
     val isFollowing by app.followRepository.observeIsFollowing(uid, FollowTargetType.TEAM, team.id).collectAsState(initial = false)
@@ -92,6 +102,8 @@ private fun TeamRow(uid: String, team: TeamEntity, modifier: Modifier = Modifier
     ListItemCard(
         modifier = modifier.padding(vertical = 6.dp),
         title = team.name,
+        subtitle = team.location,
+        onClick = onClick,
         trailing = {
             TextButton(onClick = {
                 scope.launch { app.followRepository.toggleFollow(uid, FollowTargetType.TEAM, team.id, team.name, isFollowing) }
@@ -100,30 +112,27 @@ private fun TeamRow(uid: String, team: TeamEntity, modifier: Modifier = Modifier
     )
 }
 
-/** The "create a new team" form: a name field and a big text box for player names, one per line. */
+/**
+ * The "create a new team" form — just a name and an optional location. Players used to be typed
+ * in here all at once as a big block of text; now they're added one at a time afterwards from
+ * the new team's own Players tab (see TeamDetailScreen.kt), which matches how the reference app
+ * (and real cricket clubs) actually build up a squad over time rather than all in one go.
+ */
 @Composable
-private fun CreateTeamForm(onCancel: () -> Unit, onCreate: (String, List<String>) -> Unit) {
+private fun CreateTeamForm(onCancel: () -> Unit, onCreate: (name: String, location: String?) -> Unit) {
     var name by remember { mutableStateOf("") }
-    var playersText by remember { mutableStateOf("") }
+    var location by remember { mutableStateOf("") }
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Text(text = "নতুন টিম", style = MaterialTheme.typography.headlineLarge)
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("টিমের নাম") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            value = playersText,
-            onValueChange = { playersText = it },
-            label = { Text("প্লেয়ারদের নাম (এক লাইনে একজন)") },
-            minLines = 6,
-            modifier = Modifier.fillMaxWidth()
-        )
+        OutlinedTextField(value = location, onValueChange = { location = it }, label = { Text("এলাকা / শহর (ঐচ্ছিক)") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(20.dp))
-        // Split the multi-line text into a clean list of names, same trick as MatchSetupScreen.
-        val players = playersText.lines().map { it.trim() }.filter { it.isNotEmpty() }
         Button(
-            enabled = name.isNotBlank() && players.size >= 2,
-            onClick = { onCreate(name, players) },
+            enabled = name.isNotBlank(),
+            onClick = { onCreate(name.trim(), location.trim().ifBlank { null }) },
             modifier = Modifier.fillMaxWidth()
         ) { Text("সেভ করো") }
         Spacer(Modifier.height(8.dp))

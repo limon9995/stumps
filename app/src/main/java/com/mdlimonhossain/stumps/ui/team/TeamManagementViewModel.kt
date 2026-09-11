@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mdlimonhossain.stumps.data.local.db.match.TeamEntity
-import com.mdlimonhossain.stumps.domain.model.PlayerRole
 import com.mdlimonhossain.stumps.domain.repository.TeamRepository
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -17,13 +16,16 @@ class TeamManagementViewModel(private val repository: TeamRepository, uid: Strin
     val teams: StateFlow<List<TeamEntity>> = repository.observeTeamsForUser(uid)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** Called when the user finishes the "new team" form — saves the team and all its players. */
-    fun createTeam(uid: String, name: String, playerNames: List<String>, onCreated: () -> Unit) {
+    /**
+     * Called when the user finishes the "new team" form — just a name and an optional
+     * location now (players are added afterwards from the new team's own Players tab, see
+     * TeamDetailScreen.kt) — `onCreated` is handed the brand-new team's id, so the caller can
+     * jump straight into it.
+     */
+    fun createTeam(uid: String, name: String, location: String?, onCreated: (teamId: String) -> Unit) {
         viewModelScope.launch {
-            // Every player typed in on this screen is given the same default role (BATSMAN) for
-            // now — there's no per-player role picker on this simple form yet.
-            repository.createTeam(uid, name, playerNames.map { it to PlayerRole.BATSMAN })
-            onCreated()
+            val teamId = repository.createTeam(uid, name, location = location)
+            onCreated(teamId)
         }
     }
 

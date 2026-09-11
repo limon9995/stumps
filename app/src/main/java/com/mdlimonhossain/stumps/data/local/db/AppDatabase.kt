@@ -50,7 +50,7 @@ import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentTeamEntity
         ClubEntity::class,
         FollowEntity::class
     ],
-    version = 3, // bumped from 2 when balls.fielderId and matches.format were added
+    version = 4, // bumped from 3 when teams.location was added
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -85,6 +85,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Adds teams.location — a saved team's home city/area, shown on its detail page and
+        // editable from Team Settings. Same "just ADD COLUMN, existing rows get NULL" idea as
+        // MIGRATION_2_3 above.
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE teams ADD COLUMN location TEXT")
+            }
+        }
+
         // We only ever want ONE database connection open at a time for the whole app — opening
         // multiple would waste memory and could cause weird bugs. @Volatile + synchronized here
         // is a standard Kotlin/Java pattern called a "singleton": the first time getInstance is
@@ -99,7 +108,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "stumps.db" // the actual filename this gets saved as on the phone's storage
                 )
-                    .addMigrations(MIGRATION_2_3)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
                     // A real migration now exists for every version bump so far (see above). This
                     // destructive fallback only kicks in for a version jump nobody's written a
                     // migration for yet — every NEW schema change from here on should add its own

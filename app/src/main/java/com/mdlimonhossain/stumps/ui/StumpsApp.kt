@@ -49,6 +49,7 @@ import com.mdlimonhossain.stumps.ui.search.SearchScreen
 import com.mdlimonhossain.stumps.ui.settings.SettingsScreen
 import com.mdlimonhossain.stumps.ui.settings.ThisDeviceScreen
 import com.mdlimonhossain.stumps.ui.social.FollowingScreen
+import com.mdlimonhossain.stumps.ui.team.TeamDetailScreen
 import com.mdlimonhossain.stumps.ui.team.TeamManagementScreen
 import com.mdlimonhossain.stumps.ui.tournament.TournamentDetailScreen
 import com.mdlimonhossain.stumps.ui.tournament.TournamentListScreen
@@ -264,7 +265,16 @@ private fun MainAppNavHost(
             }
 
             composable(Destinations.Teams) {
-                TeamManagementScreen(uid = currentUid, onBack = { navController.popBackStack() })
+                TeamManagementScreen(
+                    uid = currentUid,
+                    onBack = { navController.popBackStack() },
+                    onOpenTeam = { teamId -> navController.navigate(Destinations.teamDetail(teamId)) }
+                )
+            }
+
+            composable(route = Destinations.TeamDetailRoute, arguments = Destinations.teamDetailArgs) { backStackEntry ->
+                val teamId = backStackEntry.arguments?.getString("teamId") ?: return@composable
+                TeamDetailScreen(teamId = teamId, viewerUid = currentUid, onBack = { navController.popBackStack() })
             }
 
             composable(route = Destinations.TournamentsRoute, arguments = Destinations.tournamentsArgs) { backStackEntry ->

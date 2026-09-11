@@ -19,7 +19,8 @@ data class TeamEntity(
     @PrimaryKey val id: String,
     val name: String,
     val logoUrl: String? = null,
-    val createdByUid: String
+    val createdByUid: String,
+    val location: String? = null // e.g. "Dhaka" — the city/area this team is based in, shown on its detail page
 )
 
 /** One player belonging to one team. `role` is stored as plain text (matching a PlayerRole enum name). */

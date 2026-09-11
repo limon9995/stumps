@@ -60,6 +60,10 @@ object Destinations {
     fun tournamentDetail(tournamentId: String) = "tournament_detail/$tournamentId"
     val tournamentDetailArgs = listOf(navArgument("tournamentId") { type = NavType.StringType })
 
+    const val TeamDetailRoute = "team_detail/{teamId}"
+    fun teamDetail(teamId: String) = "team_detail/$teamId"
+    val teamDetailArgs = listOf(navArgument("teamId") { type = NavType.StringType })
+
     // These three "preview" screens show ANOTHER user's club/tournament/match, found via
     // Search — kept as their own separate destinations (rather than reusing Clubs/Tournaments/
     // History above) because those three always show the SIGNED-IN user's own things.
