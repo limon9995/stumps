@@ -63,6 +63,9 @@ class MatchRepository(
     // we subscribe to it, and every time the underlying data changes, we automatically get sent
     // the new value. This is how the UI stays live-updating without us manually refreshing it.
     fun observeMatchesForUser(uid: String): Flow<List<MatchEntity>> = matchDao.observeMatchesForUser(uid)
+    // Used by a saved team's own Matches tab (see TeamDetailScreen.kt) — every match this ONE
+    // team has played, whichever side of the match it was on.
+    fun observeMatchesForTeam(teamId: String): Flow<List<MatchEntity>> = matchDao.observeMatchesForTeam(teamId)
     fun observeMatch(matchId: String): Flow<MatchEntity?> = matchDao.observeMatch(matchId)
     fun observeInningsForMatch(matchId: String): Flow<List<InningsEntity>> = inningsDao.observeInningsForMatch(matchId)
     fun observePlayersForTeam(teamId: String): Flow<List<PlayerEntity>> = playerDao.observePlayersForTeam(teamId)

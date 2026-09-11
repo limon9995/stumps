@@ -27,6 +27,17 @@ interface TournamentDao {
     // find tournaments the CURRENT user themselves created.
     @Query("SELECT * FROM tournaments WHERE organizerUid = :uid AND name LIKE '%' || :query || '%' ORDER BY name")
     suspend fun searchByName(uid: String, query: String): List<TournamentEntity>
+
+    // Every tournament a given saved team has been entered into — an SQL JOIN through
+    // tournament_teams (the "who's registered in what" table) so a team's own detail page can
+    // show its tournament history without the caller needing to fetch and cross-reference two
+    // separate lists itself.
+    @Query(
+        "SELECT tournaments.* FROM tournaments " +
+            "INNER JOIN tournament_teams ON tournaments.id = tournament_teams.tournamentId " +
+            "WHERE tournament_teams.teamId = :teamId ORDER BY tournaments.createdAt DESC"
+    )
+    fun observeTournamentsForTeam(teamId: String): Flow<List<TournamentEntity>>
 }
 
 @Dao

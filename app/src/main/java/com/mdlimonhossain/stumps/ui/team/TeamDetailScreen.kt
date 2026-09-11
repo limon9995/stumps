@@ -54,8 +54,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mdlimonhossain.stumps.StumpsApplication
 import com.mdlimonhossain.stumps.data.export.ShareUtils
+import com.mdlimonhossain.stumps.data.local.db.match.MatchEntity
 import com.mdlimonhossain.stumps.data.local.db.match.PlayerEntity
 import com.mdlimonhossain.stumps.data.local.db.match.TeamEntity
+import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentEntity
 import com.mdlimonhossain.stumps.domain.model.PlayerRole
 import com.mdlimonhossain.stumps.ui.common.AnimatedTabChip
 import com.mdlimonhossain.stumps.ui.designsystem.AppCard
@@ -64,21 +66,32 @@ import com.mdlimonhossain.stumps.ui.designsystem.ListItemCard
 import com.mdlimonhossain.stumps.ui.designsystem.staggeredEntrance
 import com.mdlimonhossain.stumps.ui.theme.PitchGreen
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** Which of the six tabs on a team's detail page is currently showing. */
 private enum class TeamTab { OVERVIEW, PLAYERS, MATCHES, TOURNAMENTS, STATISTICS, COMPARE }
 
 /**
  * The full detail page for ONE saved team — reached by tapping a team card on "আমার টিম" or
- * Search. Matches, Tournaments, and the deeper Statistics/Compare numbers all need this app to
- * be able to look up "every match/tournament a given TEAM has played in", which nothing in the
- * data layer does yet (matches only remember two team IDS, not an indexed-by-team lookup) — so
- * those tabs are honest, empty placeholders for now rather than faked charts. Team Overview and
- * Players ARE fully real: this app already tracks a team's own name/location and its saved
- * roster of players.
+ * Search. Team Overview, Players, Matches, and Tournaments are all fully real now: matches are
+ * found with a database lookup for "any match where this team was teamAId OR teamBId", and
+ * tournaments with a lookup through the tournament_teams table (see MatchDao.observeMatchesForTeam
+ * and TournamentDao.observeTournamentsForTeam). Statistics and Compare stay structured
+ * placeholders — turning raw match/tournament lists into actual win/loss numbers and a real
+ * side-by-side comparison is a bigger calculation this pass doesn't attempt yet.
+ * `onOpenMatch`/`onOpenTournament` let the caller navigate away when a match/tournament row in
+ * those tabs is tapped.
  */
 @Composable
-fun TeamDetailScreen(teamId: String, viewerUid: String, onBack: () -> Unit) {
+fun TeamDetailScreen(
+    teamId: String,
+    viewerUid: String,
+    onBack: () -> Unit,
+    onOpenMatch: (matchId: String) -> Unit = {},
+    onOpenTournament: (tournamentId: String) -> Unit = {}
+) {
     val context = LocalContext.current
     val app = context.applicationContext as StumpsApplication
     val scope = rememberCoroutineScope()
@@ -90,6 +103,8 @@ fun TeamDetailScreen(teamId: String, viewerUid: String, onBack: () -> Unit) {
         isLoading = false
     }
     val players by app.teamRepository.observePlayersForTeam(teamId).collectAsState(initial = emptyList())
+    val matches by app.matchRepository.observeMatchesForTeam(teamId).collectAsState(initial = emptyList())
+    val tournaments by app.tournamentRepository.observeTournamentsForTeam(teamId).collectAsState(initial = emptyList())
 
     var showSettings by remember { mutableStateOf(false) }
     var showAddPlayer by remember { mutableStateOf(false) }
@@ -157,16 +172,8 @@ fun TeamDetailScreen(teamId: String, viewerUid: String, onBack: () -> Unit) {
         when (tab) {
             TeamTab.OVERVIEW -> TeamOverviewTab(team = t, onOpenSettings = { showSettings = true })
             TeamTab.PLAYERS -> TeamPlayersTab(players = players, onAddPlayer = { showAddPlayer = true })
-            TeamTab.MATCHES -> EmptyState(
-                icon = Icons.AutoMirrored.Filled.List,
-                title = "No Matches",
-                subtitle = "This team has not played in any matches."
-            )
-            TeamTab.TOURNAMENTS -> EmptyState(
-                icon = Icons.Filled.Star,
-                title = "No Tournaments",
-                subtitle = "This team has not participated in any tournaments."
-            )
+            TeamTab.MATCHES -> TeamMatchesTab(team = t, matches = matches, onOpenMatch = onOpenMatch)
+            TeamTab.TOURNAMENTS -> TeamTournamentsTab(tournaments = tournaments, onOpenTournament = onOpenTournament)
             TeamTab.STATISTICS -> TeamStatisticsTab()
             TeamTab.COMPARE -> TeamCompareTab(team = t)
         }
@@ -274,6 +281,77 @@ private fun TeamPlayersTab(players: List<PlayerEntity>, onAddPlayer: () -> Unit)
                             Text(text = player.name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?", fontWeight = FontWeight.Bold)
                         }
                     }
+                )
+            }
+        }
+    }
+}
+
+/** The real Matches tab — every match this team has played (found via MatchDao.observeMatchesForTeam), newest first. */
+@Composable
+private fun TeamMatchesTab(team: TeamEntity, matches: List<MatchEntity>, onOpenMatch: (String) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        if (matches.isEmpty()) {
+            EmptyState(
+                icon = Icons.AutoMirrored.Filled.List,
+                title = "No Matches",
+                subtitle = "This team has not played in any matches."
+            )
+        } else {
+            matches.forEachIndexed { index, match ->
+                TeamMatchRow(
+                    team = team,
+                    match = match,
+                    modifier = Modifier.staggeredEntrance(index).padding(vertical = 6.dp),
+                    onClick = { onOpenMatch(match.id) }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One match row on a team's own Matches tab. `match.teamAId`/`teamBId` only stores the OTHER
+ * team's raw id, not its name — so this row looks the opposing team's name up for itself
+ * (same "figure it out on demand" pattern MatchHistoryScreen's own row already uses for its
+ * resumable check) rather than the whole tab pre-loading every opponent up front.
+ */
+@Composable
+private fun TeamMatchRow(team: TeamEntity, match: MatchEntity, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val context = LocalContext.current
+    val app = context.applicationContext as StumpsApplication
+    val opponentId = if (match.teamAId == team.id) match.teamBId else match.teamAId
+    var opponentName by remember(match.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(match.id) {
+        opponentName = app.teamRepository.getTeamOnce(opponentId)?.name
+    }
+    val date = SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(match.createdAt))
+
+    ListItemCard(
+        modifier = modifier.fillMaxWidth(),
+        onClick = onClick,
+        title = "vs ${opponentName ?: "..."}",
+        subtitle = "${match.oversLimit}-over • $date • ${match.status}"
+    )
+}
+
+/** The real Tournaments tab — every tournament this team has entered (found via TournamentDao.observeTournamentsForTeam). */
+@Composable
+private fun TeamTournamentsTab(tournaments: List<TournamentEntity>, onOpenTournament: (String) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        if (tournaments.isEmpty()) {
+            EmptyState(
+                icon = Icons.Filled.Star,
+                title = "No Tournaments",
+                subtitle = "This team has not participated in any tournaments."
+            )
+        } else {
+            tournaments.forEachIndexed { index, tournament ->
+                ListItemCard(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).staggeredEntrance(index),
+                    onClick = { onOpenTournament(tournament.id) },
+                    title = tournament.name,
+                    subtitle = tournament.venue ?: "${tournament.oversPerMatch}-over • ${tournament.format}"
                 )
             }
         }

@@ -274,7 +274,13 @@ private fun MainAppNavHost(
 
             composable(route = Destinations.TeamDetailRoute, arguments = Destinations.teamDetailArgs) { backStackEntry ->
                 val teamId = backStackEntry.arguments?.getString("teamId") ?: return@composable
-                TeamDetailScreen(teamId = teamId, viewerUid = currentUid, onBack = { navController.popBackStack() })
+                TeamDetailScreen(
+                    teamId = teamId,
+                    viewerUid = currentUid,
+                    onBack = { navController.popBackStack() },
+                    onOpenMatch = { matchId -> navController.navigate(Destinations.history(matchId)) },
+                    onOpenTournament = { tournamentId -> navController.navigate(Destinations.tournamentDetail(tournamentId)) }
+                )
             }
 
             composable(route = Destinations.TournamentsRoute, arguments = Destinations.tournamentsArgs) { backStackEntry ->

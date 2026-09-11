@@ -55,6 +55,9 @@ class TournamentRepository(
     fun observeTournament(id: String): Flow<TournamentEntity?> = tournamentDao.observeById(id)
     suspend fun getTournamentOnce(id: String): TournamentEntity? = tournamentDao.getById(id)
     fun observeTournamentTeams(tournamentId: String): Flow<List<TournamentTeamEntity>> = tournamentTeamDao.observeForTournament(tournamentId)
+    // Used by a saved team's own Tournaments tab (see TeamDetailScreen.kt) — every tournament
+    // this ONE team has been entered into, newest first.
+    fun observeTournamentsForTeam(teamId: String): Flow<List<TournamentEntity>> = tournamentDao.observeTournamentsForTeam(teamId)
     fun observeFixtures(tournamentId: String): Flow<List<TournamentFixtureEntity>> = fixtureDao.observeForTournament(tournamentId)
     suspend fun searchByName(uid: String, query: String): List<TournamentEntity> = tournamentDao.searchByName(uid, query)
 

@@ -79,6 +79,11 @@ interface MatchDao {
 
     @Query("SELECT * FROM matches WHERE id = :id")
     suspend fun getById(id: String): MatchEntity?
+
+    // Every match a given saved team has played, on EITHER side (teamAId or teamBId) — this is
+    // the "lookup" that lets a team's own detail page show its match history, newest first.
+    @Query("SELECT * FROM matches WHERE teamAId = :teamId OR teamBId = :teamId ORDER BY createdAt DESC")
+    fun observeMatchesForTeam(teamId: String): Flow<List<MatchEntity>>
 }
 
 @Dao
