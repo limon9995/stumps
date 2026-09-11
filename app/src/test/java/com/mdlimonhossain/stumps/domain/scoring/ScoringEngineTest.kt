@@ -201,4 +201,72 @@ class ScoringEngineTest {
         val s = state(listOf(wideWithAngle))
         assertTrue(s.shotEvents.isEmpty())
     }
+
+    @Test
+    fun maidenOver_creditedWhenOverConcedesNoRuns() {
+        val over = (1..6).map { normalBall(it, 0) } // six dot balls
+        val s = state(over)
+        assertEquals(1, s.bowlerFigures[BOWLER]?.maidens)
+    }
+
+    @Test
+    fun maidenOver_notCreditedWhenRunsAreScored() {
+        val over = listOf(normalBall(1, 1)) + (2..6).map { normalBall(it, 0) }
+        val s = state(over)
+        assertEquals(0, s.bowlerFigures[BOWLER]?.maidens)
+    }
+
+    @Test
+    fun maidenOver_stillCountsWithByes() {
+        // A maiden is "the whole over conceded zero runs" — byes/leg-byes still break it, same as real cricket scoring.
+        val bye = BallRecord(
+            sequence = 1, bowlerId = BOWLER, strikerId = STRIKER, nonStrikerId = NON_STRIKER,
+            runsOffBat = 0, extraType = ExtraType.BYE, extraRuns = 1, runsRun = 1,
+            isWicket = false, dismissalType = null, dismissedPlayerId = null, newBatsmanId = null
+        )
+        val over = listOf(bye) + (2..6).map { normalBall(it, 0) }
+        val s = state(over)
+        assertEquals(0, s.bowlerFigures[BOWLER]?.maidens)
+    }
+
+    @Test
+    fun fiftyMilestone_recordsBallsFacedWhenFirstReached() {
+        // 13 fours in a row = 52 runs, crossing 50 on the 13th ball — fours don't rotate strike, so the same batsman faces every ball.
+        val balls = (1..13).map { normalBall(it, 4) }
+        val s = state(balls)
+        assertEquals(52, s.batsmanFigures[STRIKER]?.runs)
+        assertEquals(13, s.batsmanFigures[STRIKER]?.ballsAtFifty)
+        assertEquals(null, s.batsmanFigures[STRIKER]?.ballsAtHundred)
+    }
+
+    @Test
+    fun fiftyMilestone_notSetBelowFifty() {
+        val balls = (1..5).map { normalBall(it, 4) } // 20 runs, nowhere near 50
+        val s = state(balls)
+        assertEquals(null, s.batsmanFigures[STRIKER]?.ballsAtFifty)
+    }
+
+    @Test
+    fun partnership_closesOnWicketAndStartsFreshPairForTheNewBatsman() {
+        val wicketBall = BallRecord(
+            sequence = 3, bowlerId = BOWLER, strikerId = STRIKER, nonStrikerId = NON_STRIKER,
+            runsOffBat = 0, extraType = null, extraRuns = 0, runsRun = 0,
+            isWicket = true, dismissalType = DismissalType.BOWLED, dismissedPlayerId = STRIKER, newBatsmanId = "batsman_C"
+        )
+        val s = state(listOf(normalBall(1, 4), normalBall(2, 2), wicketBall))
+        assertEquals(1, s.partnerships.size)
+        val partnership = s.partnerships.first()
+        assertEquals(6, partnership.runs) // 4 + 2, the wicket ball itself added nothing
+        assertEquals(3, partnership.legalBalls)
+        assertEquals(1, partnership.wicketNumber)
+        assertTrue(setOf(partnership.batterAId, partnership.batterBId) == setOf(STRIKER, NON_STRIKER))
+    }
+
+    @Test
+    fun partnership_stillUnbrokenPartnershipIsRecordedAtEndOfInnings() {
+        val s = state(listOf(normalBall(1, 4), normalBall(2, 2)))
+        assertEquals(1, s.partnerships.size)
+        assertEquals(6, s.partnerships.first().runs)
+        assertEquals(2, s.partnerships.first().legalBalls)
+    }
 }

@@ -31,11 +31,21 @@ data class LeaderboardEntry(val playerName: String, val value: Int)
 /** A single best-innings bowling figure, e.g. "Rahim — 4/18". */
 data class BestBowlingEntry(val playerName: String, val wickets: Int, val runsConceded: Int)
 
+/** The tournament's best batting partnership — two players' names and how many runs they put on together. */
+data class PartnershipEntry(val playerAName: String, val playerBName: String, val runs: Int)
+
+/** A bowler with the tournament's best (lowest) economy rate, among those who've bowled at least one over. */
+data class EconomyEntry(val playerName: String, val economy: Double)
+
 /**
  * Orange Cap = the tournament's top run-scorer. Purple Cap = the tournament's top wicket-taker.
  * Same idea as the IPL awards. `highestScore`/`bestBowling` are the best SINGLE-INNINGS figures
  * (not summed across the whole tournament, unlike orangeCap/purpleCap) — the same "biggest one
  * innings" idea as CareerStats.highScore/bestBowlingFigures elsewhere in this app.
+ *
+ * The fields from `bestPartnership` onward back the reference app's "More Statistics" section —
+ * made possible by ScoringEngine now tracking ball-by-ball milestones (fastest fifty/hundred),
+ * over-level maidens, and batting partnerships, not just simple running totals.
  */
 data class TournamentLeaderboards(
     val orangeCap: List<LeaderboardEntry>,
@@ -45,7 +55,17 @@ data class TournamentLeaderboards(
     val mostSixes: List<LeaderboardEntry> = emptyList(),
     val mostFours: List<LeaderboardEntry> = emptyList(),
     val mostCatches: List<LeaderboardEntry> = emptyList(),
-    val mostStumpings: List<LeaderboardEntry> = emptyList()
+    val mostStumpings: List<LeaderboardEntry> = emptyList(),
+    val bestPartnership: PartnershipEntry? = null,
+    val mostBallsFaced: List<LeaderboardEntry> = emptyList(),
+    val fastestFifty: LeaderboardEntry? = null, // value = balls faced to reach it — LOWER is better
+    val fastestHundred: LeaderboardEntry? = null,
+    val mostMaidens: List<LeaderboardEntry> = emptyList(),
+    val bestEconomy: EconomyEntry? = null,
+    // Most sixes/fours hit in a SINGLE innings (like highestScore) — different from
+    // mostSixes/mostFours above, which are summed across the whole tournament.
+    val inningsMostSixes: LeaderboardEntry? = null,
+    val inningsMostFours: LeaderboardEntry? = null
 )
 
 class TournamentRepository(
@@ -418,8 +438,20 @@ class TournamentRepository(
         val fours = mutableMapOf<String, Int>()
         val catches = mutableMapOf<String, Int>()
         val stumpings = mutableMapOf<String, Int>()
+        val ballsFaced = mutableMapOf<String, Int>()
+        val maidens = mutableMapOf<String, Int>()
+        // Per-bowler running totals kept SEPARATELY from the summed `wickets` map above, since
+        // economy needs both a runs-conceded total AND a legal-balls total together to work out
+        // a rate at the very end, not just a single running number.
+        val economyRunsConceded = mutableMapOf<String, Int>()
+        val economyLegalBalls = mutableMapOf<String, Int>()
         var highestScore: LeaderboardEntry? = null
         var bestBowling: BestBowlingEntry? = null
+        var bestPartnership: PartnershipEntry? = null
+        var fastestFifty: LeaderboardEntry? = null
+        var fastestHundred: LeaderboardEntry? = null
+        var inningsMostSixes: LeaderboardEntry? = null
+        var inningsMostFours: LeaderboardEntry? = null
 
         for (fixture in fixtures) {
             val matchId = fixture.matchId ?: continue
@@ -429,10 +461,22 @@ class TournamentRepository(
                     runs[name] = (runs[name] ?: 0) + fig.runs
                     sixes[name] = (sixes[name] ?: 0) + fig.sixes
                     fours[name] = (fours[name] ?: 0) + fig.fours
+                    ballsFaced[name] = (ballsFaced[name] ?: 0) + fig.ballsFaced
                     if (highestScore == null || fig.runs > highestScore!!.value) highestScore = LeaderboardEntry(name, fig.runs)
+                    if (inningsMostSixes == null || fig.sixes > inningsMostSixes!!.value) inningsMostSixes = LeaderboardEntry(name, fig.sixes)
+                    if (inningsMostFours == null || fig.fours > inningsMostFours!!.value) inningsMostFours = LeaderboardEntry(name, fig.fours)
+                    fig.ballsAtFifty?.let { balls ->
+                        if (fastestFifty == null || balls < fastestFifty!!.value) fastestFifty = LeaderboardEntry(name, balls)
+                    }
+                    fig.ballsAtHundred?.let { balls ->
+                        if (fastestHundred == null || balls < fastestHundred!!.value) fastestHundred = LeaderboardEntry(name, balls)
+                    }
                 }
                 summary.state.bowlerFigures.forEach { (name, fig) ->
                     wickets[name] = (wickets[name] ?: 0) + fig.wickets
+                    maidens[name] = (maidens[name] ?: 0) + fig.maidens
+                    economyRunsConceded[name] = (economyRunsConceded[name] ?: 0) + fig.runsConceded
+                    economyLegalBalls[name] = (economyLegalBalls[name] ?: 0) + fig.legalBalls
                     // "Best" = most wickets first, then fewest runs conceded as a tie-breaker —
                     // same rule CareerStats.withBowling uses for a player's own career-best.
                     val current = bestBowling
@@ -444,11 +488,25 @@ class TournamentRepository(
                     catches[name] = (catches[name] ?: 0) + fig.catches
                     stumpings[name] = (stumpings[name] ?: 0) + fig.stumpings
                 }
+                // The names here are the SAME player-name convention used everywhere else in this
+                // app (see the class doc comment on StatsRepository) — no extra lookup needed.
+                summary.state.partnerships.forEach { p ->
+                    if (bestPartnership == null || p.runs > bestPartnership!!.runs) {
+                        bestPartnership = PartnershipEntry(p.batterAId, p.batterBId, p.runs)
+                    }
+                }
             }
         }
 
         // Sort every map highest-first and keep only the top 10 for each leaderboard.
         fun top10(map: Map<String, Int>) = map.entries.sortedByDescending { it.value }.take(10).map { LeaderboardEntry(it.key, it.value) }
+        // Best (lowest) economy, only among bowlers who've bowled at least one full over — a
+        // single wicketless ball would otherwise show a misleading "0.0" economy as "best".
+        val bestEconomy = economyLegalBalls.entries
+            .filter { it.value >= 6 }
+            .minByOrNull { (name, legalBalls) -> (economyRunsConceded[name] ?: 0) * 6.0 / legalBalls }
+            ?.let { (name, legalBalls) -> EconomyEntry(name, (economyRunsConceded[name] ?: 0) * 6.0 / legalBalls) }
+
         return TournamentLeaderboards(
             orangeCap = top10(runs),
             purpleCap = top10(wickets),
@@ -457,7 +515,15 @@ class TournamentRepository(
             mostSixes = top10(sixes),
             mostFours = top10(fours),
             mostCatches = top10(catches),
-            mostStumpings = top10(stumpings)
+            mostStumpings = top10(stumpings),
+            bestPartnership = bestPartnership,
+            mostBallsFaced = top10(ballsFaced),
+            fastestFifty = fastestFifty,
+            fastestHundred = fastestHundred,
+            mostMaidens = top10(maidens),
+            bestEconomy = bestEconomy,
+            inningsMostSixes = inningsMostSixes,
+            inningsMostFours = inningsMostFours
         )
     }
 

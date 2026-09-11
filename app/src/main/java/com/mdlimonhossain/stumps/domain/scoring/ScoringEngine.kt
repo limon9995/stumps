@@ -59,6 +59,11 @@ data class ShotEvent(val batsmanId: String, val angleDegrees: Int, val runs: Int
  * A running scoreboard-style summary for ONE batsman: how many runs they've scored so far,
  * how many balls they've faced, how many boundaries they've hit, and whether they're out yet.
  * This gets rebuilt fresh every time we replay the ball-by-ball diary.
+ *
+ * `ballsAtFifty`/`ballsAtHundred` remember exactly how many balls this batsman had faced AT THE
+ * MOMENT their running total first reached 50/100 — that's what "fastest fifty" style stats
+ * actually measure (fewer balls = faster). They stay null until (if ever) that milestone is
+ * reached, and are never overwritten once set, since a milestone only happens once per innings.
  */
 data class BatsmanFigures(
     val runs: Int = 0,
@@ -66,17 +71,22 @@ data class BatsmanFigures(
     val fours: Int = 0,
     val sixes: Int = 0,
     val isOut: Boolean = false,
-    val dismissalType: DismissalType? = null
+    val dismissalType: DismissalType? = null,
+    val ballsAtFifty: Int? = null,
+    val ballsAtHundred: Int? = null
 )
 
 /**
  * Same idea as BatsmanFigures, but for a bowler: how many (legal) balls they've bowled, how
- * many runs they've conceded, and how many wickets they've taken.
+ * many runs they've conceded, how many wickets they've taken, and how many maiden overs (an
+ * over where the WHOLE over conceded zero runs — byes/leg-byes included, same ICC scoring rule
+ * used everywhere else in real cricket) they've bowled.
  */
 data class BowlerFigures(
     val legalBalls: Int = 0,
     val runsConceded: Int = 0,
-    val wickets: Int = 0
+    val wickets: Int = 0,
+    val maidens: Int = 0
 ) {
     // Cricket overs are written like "4.2" meaning 4 full overs plus 2 balls — not a decimal number!
     // So we build that string ourselves instead of just dividing legalBalls by 6.
@@ -91,6 +101,22 @@ data class FieldingFigures(
     val catches: Int = 0,
     val stumpings: Int = 0,
     val runOuts: Int = 0
+)
+
+/**
+ * One completed (or still-unbroken, if this is the LAST entry for an innings) batting
+ * partnership — two batsmen who were at the crease together, and how many runs/legal balls the
+ * TEAM added while both of them were in. `wicketNumber` is which fall-of-wicket this partnership
+ * ended at (the 1st-wicket partnership, 2nd-wicket, and so on) — or, for the final still-unbroken
+ * entry, which wicket it WOULD be if it ended right now. Matches the standard cricket-scorecard
+ * idea of a "partnership", used for the reference app's "Best Partnership" statistic.
+ */
+data class PartnershipRecord(
+    val batterAId: String,
+    val batterBId: String,
+    val runs: Int,
+    val legalBalls: Int,
+    val wicketNumber: Int
 )
 
 /**
@@ -113,7 +139,9 @@ data class InningsState(
     val fieldingFigures: Map<String, FieldingFigures> = emptyMap(), // catches/stumpings/run-outs credited so far, keyed by fielder id
     val shotEvents: List<ShotEvent> = emptyList(), // every shot direction recorded, used to draw the wagon wheel chart
     /** Runs scored per over, index 0 = over 1. The last entry may be a partial over still in progress. */
-    val runsPerOver: List<Int> = emptyList()
+    val runsPerOver: List<Int> = emptyList(),
+    /** Every batting partnership so far, in order — the last entry is the current, still-unbroken one (see PartnershipRecord). */
+    val partnerships: List<PartnershipRecord> = emptyList()
 ) {
     // Same "4.2 overs" formatting trick as BowlerFigures.overs, but for the whole innings.
     val oversDisplay: String get() = "${legalBallsBowled / 6}.${legalBallsBowled % 6}"
@@ -161,6 +189,10 @@ object ScoringEngine {
         var bowler = openingBowlerId
         var previousOverBowler: String? = null
         var overJustCompleted = false
+        // Remembers whether the VERY LAST ball processed was a wicket — used after the loop to
+        // avoid appending a bogus, empty "phantom" partnership when the innings happened to end
+        // right on a wicket ball (that partnership was already closed off inside the loop).
+        var lastBallWasWicket = false
 
         // Maps that collect stats per-player as we go. Key = player id, Value = their figures so far.
         val batsmen = mutableMapOf<String, BatsmanFigures>()
@@ -171,14 +203,32 @@ object ScoringEngine {
         // empty bucket (over 1) and add a new empty bucket every time an over finishes.
         val runsPerOver = mutableListOf(0)
 
+        // ---- Partnership tracking ----
+        // A partnership is "how many runs/balls the team added while these exact two batsmen
+        // were both at the crease together". We track the CURRENT pair and their running total,
+        // and every time one of them gets out, we close that partnership off and start a fresh
+        // one for the survivor + whoever comes in next.
+        val partnerships = mutableListOf<PartnershipRecord>()
+        var partnerA = openingStrikerId
+        var partnerB = openingNonStrikerId
+        var partnershipRuns = 0
+        var partnershipBalls = 0
+        var wicketNumberForPartnership = 1
+
         // The main loop: go through every ball, oldest first, and update our tally.
         // sortedBy { it.sequence } makes sure we process them in the order they actually happened,
         // even if the list we were given wasn't already in order.
         for (ball in balls.sortedBy { it.sequence }) {
             overJustCompleted = false
+            lastBallWasWicket = ball.isWicket
             totalRuns += ball.runsThisBall
             // Add this ball's runs into whichever over-bucket is currently open (the last one in the list).
             runsPerOver[runsPerOver.lastIndex] = runsPerOver.last() + ball.runsThisBall
+            // The current partnership grows by every run the TEAM scores (including extras — same
+            // as a real scorecard) and every legal ball bowled, for as long as this exact pair
+            // stays unbroken.
+            partnershipRuns += ball.runsThisBall
+            if (ball.isLegalDelivery) partnershipBalls += 1
 
             // If the scorer recorded WHERE the shot went (only done for some balls), remember it
             // for the wagon wheel chart. We skip wides here because you can't really "place" a wide.
@@ -202,11 +252,17 @@ object ScoringEngine {
             // The batsman only gets personal credit for runs on a normal ball or a no-ball
             // (byes/leg-byes go to the team total but not to the batsman's own score).
             val batRunsThisBall = if (ball.extraType == null || ball.extraType == ExtraType.NO_BALL) ball.runsOffBat else 0
+            val newBatRuns = battingStats.runs + batRunsThisBall
+            val newBallsFaced = battingStats.ballsFaced + if (countsAsFaced) 1 else 0
             batsmen[batsAtCreaseId] = battingStats.copy(
-                runs = battingStats.runs + batRunsThisBall,
-                ballsFaced = battingStats.ballsFaced + if (countsAsFaced) 1 else 0,
+                runs = newBatRuns,
+                ballsFaced = newBallsFaced,
                 fours = battingStats.fours + if ((ball.extraType == null || ball.extraType == ExtraType.NO_BALL) && ball.runsOffBat == 4) 1 else 0,
-                sixes = battingStats.sixes + if ((ball.extraType == null || ball.extraType == ExtraType.NO_BALL) && ball.runsOffBat == 6) 1 else 0
+                sixes = battingStats.sixes + if ((ball.extraType == null || ball.extraType == ExtraType.NO_BALL) && ball.runsOffBat == 6) 1 else 0,
+                // A milestone is only ever recorded the FIRST time the total crosses the line —
+                // once ballsAtFifty/ballsAtHundred is set, it's never overwritten.
+                ballsAtFifty = battingStats.ballsAtFifty ?: (if (newBatRuns >= 50) newBallsFaced else null),
+                ballsAtHundred = battingStats.ballsAtHundred ?: (if (newBatRuns >= 100) newBallsFaced else null)
             )
 
             var updatedBowlerStats = bowlerStats.copy(
@@ -222,6 +278,16 @@ object ScoringEngine {
                 val dismissedId = ball.dismissedPlayerId ?: batsAtCreaseId
                 val dismissedStats = batsmen.getOrDefault(dismissedId, BatsmanFigures())
                 batsmen[dismissedId] = dismissedStats.copy(isOut = true, dismissalType = ball.dismissalType)
+
+                // This wicket breaks the current partnership — close it off, then start a fresh
+                // one for whoever's left + the new batsman coming in (if the innings isn't over).
+                partnerships.add(PartnershipRecord(partnerA, partnerB, partnershipRuns, partnershipBalls, wicketNumberForPartnership))
+                if (ball.newBatsmanId != null) {
+                    if (dismissedId == partnerA) partnerA = ball.newBatsmanId else partnerB = ball.newBatsmanId
+                }
+                partnershipRuns = 0
+                partnershipBalls = 0
+                wicketNumberForPartnership += 1
                 // A bowler only gets "credit" for a wicket if it wasn't a run out — a run out is
                 // usually the fielders' doing, not really the bowler's achievement.
                 if (ball.dismissalType != DismissalType.RUN_OUT) {
@@ -266,9 +332,16 @@ object ScoringEngine {
                 legalBalls += 1
                 ballsInCurrentOver += 1
                 if (ballsInCurrentOver == 6) {
-                    // The over just finished! Reset the ball counter, remember who bowled it
-                    // (so we don't let them bowl the very next over too), and open a fresh
-                    // "bucket" in runsPerOver for the next over's runs.
+                    // The over just finished! A "maiden" is an over where the team scored
+                    // NOTHING at all off it — checked here, before the fresh bucket below opens,
+                    // while runsPerOver's last bucket still holds this just-finished over's total.
+                    if (runsPerOver.last() == 0) {
+                        val overBowlerStats = bowlers.getOrDefault(bowler, BowlerFigures())
+                        bowlers[bowler] = overBowlerStats.copy(maidens = overBowlerStats.maidens + 1)
+                    }
+                    // Reset the ball counter, remember who bowled it (so we don't let them bowl
+                    // the very next over too), and open a fresh "bucket" in runsPerOver for the
+                    // next over's runs.
                     ballsInCurrentOver = 0
                     previousOverBowler = bowler
                     overJustCompleted = true
@@ -293,6 +366,15 @@ object ScoringEngine {
         // or they've used up every ball they're allowed to face.
         val isComplete = totalWickets >= (squadSize - 1) || legalBalls >= oversLimit * 6
 
+        // The LAST partnership never got closed off by a wicket (either it's still unbroken, or
+        // the innings ended because overs ran out) — add it now so it's not lost. Skipped when
+        // no ball has been bowled yet (nothing to show), or when the very last ball WAS a wicket
+        // (that partnership was already closed off and appended inside the loop above — adding
+        // it again here would just create a bogus empty "0 runs" duplicate).
+        if (balls.isNotEmpty() && !lastBallWasWicket) {
+            partnerships.add(PartnershipRecord(partnerA, partnerB, partnershipRuns, partnershipBalls, wicketNumberForPartnership))
+        }
+
         // Package everything we worked out into one neat object and hand it back.
         return InningsState(
             totalRuns = totalRuns,
@@ -309,7 +391,8 @@ object ScoringEngine {
             bowlerFigures = bowlers,
             fieldingFigures = fielders,
             shotEvents = shotEvents,
-            runsPerOver = runsPerOver
+            runsPerOver = runsPerOver,
+            partnerships = partnerships
         )
     }
 }

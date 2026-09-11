@@ -35,7 +35,12 @@ data class CareerStats(
     val bestBowlingRuns: Int = 0,
     val catches: Int = 0,
     val stumpings: Int = 0,
-    val runOuts: Int = 0
+    val runOuts: Int = 0,
+    // The fewest balls this player has EVER taken to reach 50/100 runs in one innings — null
+    // means they've never reached that milestone. Lower is "faster" (better).
+    val fastestFiftyBalls: Int? = null,
+    val fastestHundredBalls: Int? = null,
+    val maidens: Int = 0
 ) {
     // Batting average = total runs divided by how many times you got out. If you've never been
     // out, cricket convention is to just show your total runs (can't divide by zero!).
@@ -48,6 +53,13 @@ data class CareerStats(
     val bowlingAverage: Double get() = if (wickets == 0) 0.0 else runsConceded.toDouble() / wickets
     // The usual cricket shorthand for best bowling figures, e.g. "3/24". "-" if they've never bowled.
     val bestBowlingFigures: String get() = if (inningsBowled == 0) "-" else "$bestBowlingWickets/$bestBowlingRuns"
+}
+
+/** Whichever of the two is non-null and smaller — null only when BOTH are null. Used to fold a new milestone onto a running "fastest so far" total. */
+private fun minOfNullable(a: Int?, b: Int?): Int? = when {
+    a == null -> b
+    b == null -> a
+    else -> minOf(a, b)
 }
 
 /**
@@ -164,7 +176,9 @@ class StatsRepository(
             hundreds = hundreds + milestone.first,
             fifties = fifties + milestone.second,
             thirties = thirties + milestone.third,
-            ducks = ducks + if (fig.isOut && fig.runs == 0) 1 else 0
+            ducks = ducks + if (fig.isOut && fig.runs == 0) 1 else 0,
+            fastestFiftyBalls = minOfNullable(fastestFiftyBalls, fig.ballsAtFifty),
+            fastestHundredBalls = minOfNullable(fastestHundredBalls, fig.ballsAtHundred)
         )
     }
 
@@ -183,7 +197,8 @@ class StatsRepository(
             ballsBowled = ballsBowled + fig.legalBalls,
             runsConceded = runsConceded + fig.runsConceded,
             bestBowlingWickets = if (isNewBest) fig.wickets else bestBowlingWickets,
-            bestBowlingRuns = if (isNewBest) fig.runsConceded else bestBowlingRuns
+            bestBowlingRuns = if (isNewBest) fig.runsConceded else bestBowlingRuns,
+            maidens = maidens + fig.maidens
         )
     }
 

@@ -134,7 +134,9 @@ fun PlayerStatisticsBreakdown(statsByFormat: Map<MatchFormat, CareerStats>, rece
                 "50s" to { s -> s.fifties.toString() },
                 "30s" to { s -> s.thirties.toString() },
                 "6s" to { s -> s.sixes.toString() },
-                "4s" to { s -> s.fours.toString() }
+                "4s" to { s -> s.fours.toString() },
+                "Fastest 50" to { s -> s.fastestFiftyBalls?.toString() ?: "-" },
+                "Fastest 100" to { s -> s.fastestHundredBalls?.toString() ?: "-" }
             )
         )
         StatCategory.BOWL -> FormatStatsTable(
@@ -147,7 +149,8 @@ fun PlayerStatisticsBreakdown(statsByFormat: Map<MatchFormat, CareerStats>, rece
                 "Runs" to { s -> s.runsConceded.toString() },
                 "Best" to { s -> s.bestBowlingFigures },
                 "Average" to { s -> if (s.wickets == 0) "-" else oneDecimal(s.bowlingAverage) },
-                "Economy" to { s -> oneDecimal(s.economy) }
+                "Economy" to { s -> oneDecimal(s.economy) },
+                "Maidens" to { s -> s.maidens.toString() }
             )
         )
         StatCategory.FIELD -> FormatStatsTable(

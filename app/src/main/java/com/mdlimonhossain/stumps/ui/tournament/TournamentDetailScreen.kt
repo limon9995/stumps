@@ -535,13 +535,10 @@ internal fun PointsTab(standings: List<com.mdlimonhossain.stumps.domain.tourname
 /** Orange Cap / Purple Cap — same content the old "লিডারবোর্ড" tab had. */
 @Composable
 internal fun StatisticsTab(leaderboards: com.mdlimonhossain.stumps.domain.repository.TournamentLeaderboards) {
+    var showMore by remember { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
         // A quick-glance card grid, matching the reference app's Statistics page layout — each
-        // card shows the tournament's single current leader for that number. The "More
-        // Statistics" section the reference app has below this (fastest fifty/hundred, best
-        // partnership, best economy, most maidens, ...) needs ball-by-ball milestone and
-        // over-level tracking this app's scoring engine doesn't record yet, so it isn't shown
-        // here rather than being faked with zeroes.
+        // card shows the tournament's single current leader for that number.
         Row(modifier = Modifier.fillMaxWidth()) {
             TopPlayerStat(modifier = Modifier.weight(1f), label = "Most Runs", value = (leaderboards.orangeCap.firstOrNull()?.value ?: 0).toString(), playerName = leaderboards.orangeCap.firstOrNull()?.playerName ?: "-")
             TopPlayerStat(modifier = Modifier.weight(1f), label = "Most Wickets", value = (leaderboards.purpleCap.firstOrNull()?.value ?: 0).toString(), playerName = leaderboards.purpleCap.firstOrNull()?.playerName ?: "-")
@@ -561,6 +558,69 @@ internal fun StatisticsTab(leaderboards: com.mdlimonhossain.stumps.domain.reposi
         Row(modifier = Modifier.fillMaxWidth()) {
             TopPlayerStat(modifier = Modifier.weight(1f), label = "Stumpings", value = (leaderboards.mostStumpings.firstOrNull()?.value ?: 0).toString(), playerName = leaderboards.mostStumpings.firstOrNull()?.playerName ?: "-")
             TopPlayerStat(modifier = Modifier.weight(1f), label = "Catches", value = (leaderboards.mostCatches.firstOrNull()?.value ?: 0).toString(), playerName = leaderboards.mostCatches.firstOrNull()?.playerName ?: "-")
+        }
+        Spacer(Modifier.height(16.dp))
+
+        if (showMore) {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                TopPlayerStat(
+                    modifier = Modifier.weight(1f), label = "Fastest Fifty",
+                    value = leaderboards.fastestFifty?.value?.toString() ?: "-",
+                    playerName = leaderboards.fastestFifty?.playerName ?: "-"
+                )
+                TopPlayerStat(
+                    modifier = Modifier.weight(1f), label = "Fastest Hundred",
+                    value = leaderboards.fastestHundred?.value?.toString() ?: "-",
+                    playerName = leaderboards.fastestHundred?.playerName ?: "-"
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                val bp = leaderboards.bestPartnership
+                TopPlayerStat(
+                    modifier = Modifier.weight(1f), label = "Best Partnership",
+                    value = (bp?.runs ?: 0).toString(),
+                    playerName = if (bp == null) "-" else "${bp.playerAName} & ${bp.playerBName}"
+                )
+                TopPlayerStat(
+                    modifier = Modifier.weight(1f), label = "Most Balls Faced",
+                    value = (leaderboards.mostBallsFaced.firstOrNull()?.value ?: 0).toString(),
+                    playerName = leaderboards.mostBallsFaced.firstOrNull()?.playerName ?: "-"
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                TopPlayerStat(
+                    modifier = Modifier.weight(1f), label = "Innings Most Sixes",
+                    value = (leaderboards.inningsMostSixes?.value ?: 0).toString(),
+                    playerName = leaderboards.inningsMostSixes?.playerName ?: "-"
+                )
+                TopPlayerStat(
+                    modifier = Modifier.weight(1f), label = "Innings Most Fours",
+                    value = (leaderboards.inningsMostFours?.value ?: 0).toString(),
+                    playerName = leaderboards.inningsMostFours?.playerName ?: "-"
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                val be = leaderboards.bestEconomy
+                TopPlayerStat(
+                    modifier = Modifier.weight(1f), label = "Best Economy",
+                    value = if (be == null) "-" else String.format(java.util.Locale.US, "%.1f", be.economy),
+                    playerName = be?.playerName ?: "-"
+                )
+                TopPlayerStat(
+                    modifier = Modifier.weight(1f), label = "Most Maidens",
+                    value = (leaderboards.mostMaidens.firstOrNull()?.value ?: 0).toString(),
+                    playerName = leaderboards.mostMaidens.firstOrNull()?.playerName ?: "-"
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            androidx.compose.material3.OutlinedButton(onClick = { showMore = !showMore }) {
+                Text(if (showMore) "Show Less" else "More Statistics")
+            }
         }
         Spacer(Modifier.height(24.dp))
 
