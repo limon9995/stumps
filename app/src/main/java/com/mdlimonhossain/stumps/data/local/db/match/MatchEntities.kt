@@ -23,13 +23,20 @@ data class TeamEntity(
     val location: String? = null // e.g. "Dhaka" — the city/area this team is based in, shown on its detail page
 )
 
-/** One player belonging to one team. `role` is stored as plain text (matching a PlayerRole enum name). */
+/**
+ * One player belonging to one team. `role` is stored as plain text (matching a PlayerRole enum
+ * name). `isCaptain`/`isViceCaptain` are simple on/off flags — at most one player per team should
+ * have each flag set to true at a time (TeamRepository.toggleCaptain/toggleViceCaptain enforce
+ * that by clearing the flag on every other player of the same team before setting it).
+ */
 @Entity(tableName = "players")
 data class PlayerEntity(
     @PrimaryKey val id: String,
     val teamId: String, // which team this player belongs to — links back to a TeamEntity's id
     val name: String,
-    val role: String
+    val role: String,
+    val isCaptain: Boolean = false,
+    val isViceCaptain: Boolean = false
 )
 
 /**

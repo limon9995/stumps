@@ -38,6 +38,11 @@ data class LiveInnings(val innings: InningsEntity, val match: MatchEntity, val s
 /** How two teams have fared against each other across every match this user has recorded between them (not counting the match currently being looked at). */
 data class HeadToHeadRecord(val teamAWins: Int, val teamBWins: Int, val played: Int)
 
+/** One saved team's overall win/loss record across every finished match it's played (see MatchRepository.teamRecord). */
+data class TeamRecord(val played: Int, val won: Int, val lost: Int, val tied: Int) {
+    val winPercent: Double get() = if (played == 0) 0.0 else (won * 100.0) / played
+}
+
 /** A finished innings plus the display name of the batting team — for history/summary screens. */
 data class InningsSummary(
     val innings: InningsEntity,
@@ -67,6 +72,34 @@ class MatchRepository(
     // team has played, whichever side of the match it was on.
     fun observeMatchesForTeam(teamId: String): Flow<List<MatchEntity>> = matchDao.observeMatchesForTeam(teamId)
     fun observeMatch(matchId: String): Flow<MatchEntity?> = matchDao.observeMatch(matchId)
+
+    /**
+     * Works out one saved team's overall Played/Won/Lost/Tied record, by replaying every match
+     * it's been part of and comparing both innings' final run totals — same "who scored more
+     * runs" comparison headToHead already uses below, but matched up by team ID (accurate, since
+     * a saved team keeps the same id forever) rather than by team NAME (which headToHead has to
+     * fall back on for the older ad-hoc quick-match teams that never got a stable saved id).
+     * Used by a team's own Statistics tab and by the Compare tab (see TeamDetailScreen.kt).
+     */
+    suspend fun teamRecord(teamId: String): TeamRecord {
+        var played = 0
+        var won = 0
+        var lost = 0
+        var tied = 0
+        for (match in matchDao.getMatchesForTeamOnce(teamId)) {
+            val innings = getFinalInningsStates(match.id)
+            if (innings.size < 2) continue // never finished — no winner to count yet
+            val ours = innings.firstOrNull { it.innings.battingTeamId == teamId } ?: continue
+            val theirs = innings.firstOrNull { it.innings.battingTeamId != teamId } ?: continue
+            played += 1
+            when {
+                ours.state.totalRuns > theirs.state.totalRuns -> won += 1
+                theirs.state.totalRuns > ours.state.totalRuns -> lost += 1
+                else -> tied += 1
+            }
+        }
+        return TeamRecord(played, won, lost, tied)
+    }
     fun observeInningsForMatch(matchId: String): Flow<List<InningsEntity>> = inningsDao.observeInningsForMatch(matchId)
     fun observePlayersForTeam(teamId: String): Flow<List<PlayerEntity>> = playerDao.observePlayersForTeam(teamId)
 

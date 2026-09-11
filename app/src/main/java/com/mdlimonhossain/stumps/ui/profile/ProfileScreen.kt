@@ -53,6 +53,10 @@ import com.mdlimonhossain.stumps.domain.repository.CareerStats
 import com.mdlimonhossain.stumps.ui.common.AnimatedTabChip
 import com.mdlimonhossain.stumps.ui.designsystem.AppCard
 import com.mdlimonhossain.stumps.ui.designsystem.EmptyState
+import com.mdlimonhossain.stumps.ui.designsystem.PlayerStatisticsBreakdown
+import com.mdlimonhossain.stumps.ui.designsystem.RecentFormCircle
+import com.mdlimonhossain.stumps.ui.designsystem.StatCard
+import com.mdlimonhossain.stumps.ui.designsystem.oneDecimal
 import com.mdlimonhossain.stumps.ui.theme.PitchGreen
 
 /**
@@ -68,9 +72,6 @@ private enum class ProfileTab { OVERVIEW, STATISTICS, MATCHES, TEAMS, TOURNAMENT
 
 /** Batting vs bowling toggle shared by the two new Overview sections below (Yearly Overview, Best Against Team). */
 private enum class BatBowl { BAT, BOWL }
-
-/** Which slice of detailed numbers the Statistics tab is currently showing. */
-private enum class StatCategory { BAT, BOWL, FIELD, MATCH_WISE }
 
 /**
  * The signed-in user's own Player Profile screen: an "Overview" tab with headline stat cards
@@ -132,7 +133,7 @@ fun ProfileScreen(
 
         when (tab) {
             ProfileTab.OVERVIEW -> OverviewTab(profile, uiState.stats.careerStats, uiState.stats.recentForm, onSignOut)
-            ProfileTab.STATISTICS -> StatisticsTab(uiState.stats.statsByFormat, uiState.stats.recentForm)
+            ProfileTab.STATISTICS -> PlayerStatisticsBreakdown(uiState.stats.statsByFormat, uiState.stats.recentForm)
             ProfileTab.MATCHES -> EmptyState(
                 icon = Icons.AutoMirrored.Filled.List,
                 title = "No Matches",
@@ -392,168 +393,8 @@ private fun BatBowlToggle(mode: BatBowl, onChange: (BatBowl) -> Unit) {
     }
 }
 
-@Composable
-private fun StatCard(modifier: Modifier, title: String, headerColor: Color, rows: List<Pair<String, String>>) {
-    Surface(modifier = modifier, shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainer) {
-        Column {
-            Box(modifier = Modifier.fillMaxWidth().background(headerColor).padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                Text(text = title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            }
-            rows.forEachIndexed { index, (label, value) ->
-                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(text = value, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text(text = label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (index != rows.lastIndex) HorizontalDivider()
-            }
-        }
-    }
-}
-
-@Composable
-private fun RecentFormCircle(runs: Int?, isNewest: Boolean) {
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .clip(CircleShape)
-            .background(if (isNewest && runs != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = runs?.toString() ?: "-",
-            color = if (isNewest && runs != null) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold,
-            fontSize = 13.sp
-        )
-    }
-}
-
-@Composable
-private fun StatisticsTab(statsByFormat: Map<com.mdlimonhossain.stumps.domain.model.MatchFormat, CareerStats>, recentForm: List<Int?>) {
-    var category by remember { mutableStateOf(StatCategory.BAT) }
-    // Only show a column for a format this player has actually played at least one match in —
-    // an all-zero column for a format they've never touched would just be visual noise.
-    val formats = com.mdlimonhossain.stumps.domain.model.MatchFormat.entries.filter { statsByFormat.containsKey(it) }
-
-    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        AnimatedTabChip(label = "BAT", selected = category == StatCategory.BAT, modifier = Modifier.weight(1f)) { category = StatCategory.BAT }
-        AnimatedTabChip(label = "BOWL", selected = category == StatCategory.BOWL, modifier = Modifier.weight(1f)) { category = StatCategory.BOWL }
-        AnimatedTabChip(label = "FIELD", selected = category == StatCategory.FIELD, modifier = Modifier.weight(1f)) { category = StatCategory.FIELD }
-        AnimatedTabChip(label = "MATCH-WISE", selected = category == StatCategory.MATCH_WISE, modifier = Modifier.weight(1.4f)) { category = StatCategory.MATCH_WISE }
-    }
-    Spacer(Modifier.height(20.dp))
-
-    if (formats.isEmpty() && category != StatCategory.MATCH_WISE) {
-        Text(
-            text = "এখনো কোনো ম্যাচে ফরম্যাট (T10/T20/ODI) বেছে নেওয়া হয়নি — নতুন ম্যাচ শুরু করার সময় এখন এই তথ্য জিজ্ঞেস করা হয়",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp)
-        )
-        return
-    }
-
-    when (category) {
-        StatCategory.BAT -> FormatStatsTable(
-            formats, statsByFormat,
-            listOf(
-                "Matches" to { s: CareerStats -> s.matchesPlayed.toString() },
-                "Innings" to { s -> s.inningsBatted.toString() },
-                "Runs" to { s -> s.runs.toString() },
-                "Balls" to { s -> s.ballsFaced.toString() },
-                "Highest" to { s -> s.highScore.toString() },
-                "Average" to { s -> oneDecimal(s.battingAverage) },
-                "SR" to { s -> oneDecimal(s.strikeRate) },
-                "Not Out" to { s -> s.notOuts.toString() },
-                "Ducks" to { s -> s.ducks.toString() },
-                "100s" to { s -> s.hundreds.toString() },
-                "50s" to { s -> s.fifties.toString() },
-                "30s" to { s -> s.thirties.toString() },
-                "6s" to { s -> s.sixes.toString() },
-                "4s" to { s -> s.fours.toString() }
-            )
-        )
-        StatCategory.BOWL -> FormatStatsTable(
-            formats, statsByFormat,
-            listOf(
-                "Matches" to { s: CareerStats -> s.matchesPlayed.toString() },
-                "Innings" to { s -> s.inningsBowled.toString() },
-                "Wickets" to { s -> s.wickets.toString() },
-                "Balls" to { s -> s.ballsBowled.toString() },
-                "Runs" to { s -> s.runsConceded.toString() },
-                "Best" to { s -> s.bestBowlingFigures },
-                "Average" to { s -> if (s.wickets == 0) "-" else oneDecimal(s.bowlingAverage) },
-                "Economy" to { s -> oneDecimal(s.economy) }
-            )
-        )
-        StatCategory.FIELD -> FormatStatsTable(
-            formats, statsByFormat,
-            listOf(
-                "Catches" to { s: CareerStats -> s.catches.toString() },
-                "Stumpings" to { s -> s.stumpings.toString() },
-                "Runouts" to { s -> s.runOuts.toString() }
-            )
-        )
-        StatCategory.MATCH_WISE -> MatchWiseList(recentForm)
-    }
-}
-
-/**
- * A table with one row per stat and one COLUMN per match format the player has actually played
- * (T10/T20/ODI/Club/Custom) — the reference app's signature format-wise breakdown. Wrapped in
- * horizontalScroll since with 4-5 format columns plus the label column, it's wider than a phone
- * screen — same pattern as the Tournament Points table.
- */
-@Composable
-private fun FormatStatsTable(
-    formats: List<com.mdlimonhossain.stumps.domain.model.MatchFormat>,
-    statsByFormat: Map<com.mdlimonhossain.stumps.domain.model.MatchFormat, CareerStats>,
-    rows: List<Pair<String, (CareerStats) -> String>>
-) {
-    Column(modifier = Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 20.dp)) {
-        Row(modifier = Modifier.padding(vertical = 4.dp)) {
-            com.mdlimonhossain.stumps.ui.tournament.HeaderCell("", 90)
-            formats.forEach { f -> com.mdlimonhossain.stumps.ui.tournament.HeaderCell(com.mdlimonhossain.stumps.ui.match.matchFormatLabel(f), 70) }
-        }
-        rows.forEach { (label, valueFor) ->
-            Row(modifier = Modifier.padding(vertical = 6.dp)) {
-                com.mdlimonhossain.stumps.ui.tournament.Cell(label, 90)
-                formats.forEach { f ->
-                    com.mdlimonhossain.stumps.ui.tournament.Cell(valueFor(statsByFormat.getOrDefault(f, CareerStats())), 70)
-                }
-            }
-            HorizontalDivider()
-        }
-    }
-}
-
-@Composable
-private fun MatchWiseList(recentForm: List<Int?>) {
-    if (recentForm.isEmpty()) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(Modifier.height(20.dp))
-            Text(text = "কোনো ম্যাচ-ভিত্তিক পরিসংখ্যান নেই", fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "তুমি এখনো Stumps অ্যাপে কোনো ম্যাচ খেলোনি।",
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-        }
-        return
-    }
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-        // Newest innings first — recentForm is already ordered that way (see StatsRepository).
-        recentForm.forEachIndexed { index, runs ->
-            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-                Text(text = "ইনিংস ${recentForm.size - index}", modifier = Modifier.weight(1f))
-                Text(text = runs?.let { "$it রান" } ?: "ব্যাট করেনি", fontWeight = FontWeight.Bold)
-            }
-            HorizontalDivider()
-        }
-    }
-}
-
-/** Formats a stat like batting average or strike rate to one decimal place, e.g. "34.5". */
-private fun oneDecimal(value: Double): String = String.format(java.util.Locale.US, "%.1f", value)
+// StatCard, RecentFormCircle, the Statistics tab's BAT/BOWL/FIELD/MATCH-WISE breakdown, and
+// oneDecimal() used to all live here — they're now shared, public composables in
+// ui/designsystem/PlayerStatsComponents.kt, so a saved team's own Player Profile page (see
+// ui/team/PlayerProfileScreen.kt) can show the exact same cards/table instead of duplicating
+// ~160 lines of near-identical UI code.

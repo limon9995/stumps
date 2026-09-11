@@ -1,6 +1,7 @@
 package com.mdlimonhossain.stumps.ui.team
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,8 @@ import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
@@ -30,6 +33,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -75,14 +79,14 @@ private enum class TeamTab { OVERVIEW, PLAYERS, MATCHES, TOURNAMENTS, STATISTICS
 
 /**
  * The full detail page for ONE saved team — reached by tapping a team card on "আমার টিম" or
- * Search. Team Overview, Players, Matches, and Tournaments are all fully real now: matches are
- * found with a database lookup for "any match where this team was teamAId OR teamBId", and
- * tournaments with a lookup through the tournament_teams table (see MatchDao.observeMatchesForTeam
- * and TournamentDao.observeTournamentsForTeam). Statistics and Compare stay structured
- * placeholders — turning raw match/tournament lists into actual win/loss numbers and a real
- * side-by-side comparison is a bigger calculation this pass doesn't attempt yet.
- * `onOpenMatch`/`onOpenTournament` let the caller navigate away when a match/tournament row in
- * those tabs is tapped.
+ * Search. Every tab now shows real data computed from this app's own match/tournament records:
+ * matches are found with a database lookup for "any match where this team was teamAId OR
+ * teamBId", tournaments with a lookup through the tournament_teams table, win/loss record with
+ * MatchRepository.teamRecord (replays every finished match's two innings and compares run
+ * totals), and each player's Matches/Runs/Wickets summary with StatsRepository.careerStatsFor
+ * (the same career-stats engine the signed-in user's own Profile page uses). `onOpenMatch`/
+ * `onOpenTournament`/`onOpenPlayer` let the caller navigate away when a row in those tabs is
+ * tapped.
  */
 @Composable
 fun TeamDetailScreen(
@@ -90,7 +94,8 @@ fun TeamDetailScreen(
     viewerUid: String,
     onBack: () -> Unit,
     onOpenMatch: (matchId: String) -> Unit = {},
-    onOpenTournament: (tournamentId: String) -> Unit = {}
+    onOpenTournament: (tournamentId: String) -> Unit = {},
+    onOpenPlayer: (playerId: String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as StumpsApplication
@@ -105,6 +110,20 @@ fun TeamDetailScreen(
     val players by app.teamRepository.observePlayersForTeam(teamId).collectAsState(initial = emptyList())
     val matches by app.matchRepository.observeMatchesForTeam(teamId).collectAsState(initial = emptyList())
     val tournaments by app.tournamentRepository.observeTournamentsForTeam(teamId).collectAsState(initial = emptyList())
+
+    // A career-stats lookup for every player currently on the roster, keyed by their row id —
+    // recomputed whenever the roster itself changes (a player added/removed). Kept up here, one
+    // level above the Players AND Statistics tabs, so both can share the same numbers instead of
+    // each re-walking every match's ball-by-ball data a second time.
+    var playerStats by remember { mutableStateOf<Map<String, com.mdlimonhossain.stumps.domain.repository.CareerStats>>(emptyMap()) }
+    LaunchedEffect(players) {
+        playerStats = players.associate { it.id to app.statsRepository.careerStatsFor(viewerUid, it.name) }
+    }
+    // This team's own Played/Won/Lost/Tied record — recomputed whenever its match list changes.
+    var teamRecord by remember { mutableStateOf<com.mdlimonhossain.stumps.domain.repository.TeamRecord?>(null) }
+    LaunchedEffect(matches) {
+        teamRecord = app.matchRepository.teamRecord(teamId)
+    }
 
     var showSettings by remember { mutableStateOf(false) }
     var showAddPlayer by remember { mutableStateOf(false) }
@@ -170,12 +189,17 @@ fun TeamDetailScreen(
         Spacer(Modifier.height(20.dp))
 
         when (tab) {
-            TeamTab.OVERVIEW -> TeamOverviewTab(team = t, onOpenSettings = { showSettings = true })
-            TeamTab.PLAYERS -> TeamPlayersTab(players = players, onAddPlayer = { showAddPlayer = true })
+            TeamTab.OVERVIEW -> TeamOverviewTab(team = t, teamRecord = teamRecord, onOpenSettings = { showSettings = true })
+            TeamTab.PLAYERS -> TeamPlayersTab(
+                players = players,
+                playerStats = playerStats,
+                onAddPlayer = { showAddPlayer = true },
+                onOpenPlayer = onOpenPlayer
+            )
             TeamTab.MATCHES -> TeamMatchesTab(team = t, matches = matches, onOpenMatch = onOpenMatch)
             TeamTab.TOURNAMENTS -> TeamTournamentsTab(tournaments = tournaments, onOpenTournament = onOpenTournament)
-            TeamTab.STATISTICS -> TeamStatisticsTab()
-            TeamTab.COMPARE -> TeamCompareTab(team = t)
+            TeamTab.STATISTICS -> TeamStatisticsTab(players = players, playerStats = playerStats, teamRecord = teamRecord)
+            TeamTab.COMPARE -> TeamCompareTab(team = t, ourRecord = teamRecord, viewerUid = viewerUid)
         }
     }
 
@@ -190,12 +214,15 @@ fun TeamDetailScreen(
     }
 }
 
-/** The header (avatar/name/location/id/share/settings) plus a single honest "not enough match
- * data yet" block standing in for the reference app's Win/Loss ratio, Top Performers, Scheduled
- * Matches, and recent-runs/wickets charts — all four need a "matches this team has played"
- * lookup this app doesn't have yet, so one clear empty state is more honest than four fake ones. */
+/**
+ * The header (avatar/name/location/id/share/settings) plus this team's real Played/Won/Lost/Tied
+ * record. The reference app's other Overview widgets — Top Performers, Scheduled Matches, and
+ * recent-runs/wickets charts — still aren't shown here: those need PER-MATCH highlights (who
+ * scored the most in each game) rather than the simple career totals this pass computes, so
+ * they're left for a later pass instead of being faked.
+ */
 @Composable
-private fun TeamOverviewTab(team: TeamEntity, onOpenSettings: () -> Unit) {
+private fun TeamOverviewTab(team: TeamEntity, teamRecord: com.mdlimonhossain.stumps.domain.repository.TeamRecord?, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -241,17 +268,46 @@ private fun TeamOverviewTab(team: TeamEntity, onOpenSettings: () -> Unit) {
             }
         }
         Spacer(Modifier.height(24.dp))
-        EmptyState(
-            icon = Icons.Filled.Star,
-            title = "এখনো কোনো ম্যাচের তথ্য নেই",
-            subtitle = "এই টিম দিয়ে ম্যাচ/টুর্নামেন্ট খেললে win/loss, top performer আর recent form এখানে দেখা যাবে।"
-        )
+        if (teamRecord == null || teamRecord.played == 0) {
+            EmptyState(
+                icon = Icons.Filled.Star,
+                title = "এখনো কোনো ম্যাচের তথ্য নেই",
+                subtitle = "এই টিম দিয়ে ম্যাচ/টুর্নামেন্ট খেললে win/loss এখানে দেখা যাবে।"
+            )
+        } else {
+            AppCard(modifier = Modifier.fillMaxWidth()) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    OverviewRecordStat("Played", teamRecord.played.toString())
+                    OverviewRecordStat("Won", teamRecord.won.toString())
+                    OverviewRecordStat("Lost", teamRecord.lost.toString())
+                    OverviewRecordStat("Tied", teamRecord.tied.toString())
+                    OverviewRecordStat("Win %", com.mdlimonhossain.stumps.ui.designsystem.oneDecimal(teamRecord.winPercent))
+                }
+            }
+        }
     }
 }
 
-/** The real, functional Players tab — list of saved players, with a dialog to add more. */
 @Composable
-private fun TeamPlayersTab(players: List<PlayerEntity>, onAddPlayer: () -> Unit) {
+private fun OverviewRecordStat(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = value, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text(text = label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * The real, functional Players tab — list of saved players, each shown as a summary card
+ * (Matches/Runs/Wickets, Captain/Vice-Captain/Wicket-Keeper badges, a link into their full
+ * profile), plus a dialog to add more players.
+ */
+@Composable
+private fun TeamPlayersTab(
+    players: List<PlayerEntity>,
+    playerStats: Map<String, com.mdlimonhossain.stumps.domain.repository.CareerStats>,
+    onAddPlayer: () -> Unit,
+    onOpenPlayer: (String) -> Unit
+) {
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
         Row(modifier = Modifier.fillMaxWidth()) {
             TextButton(onClick = onAddPlayer) {
@@ -269,21 +325,156 @@ private fun TeamPlayersTab(players: List<PlayerEntity>, onAddPlayer: () -> Unit)
             )
         } else {
             players.forEachIndexed { index, player ->
-                ListItemCard(
+                TeamPlayerRow(
+                    player = player,
+                    stats = playerStats[player.id] ?: com.mdlimonhossain.stumps.domain.repository.CareerStats(),
                     modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).staggeredEntrance(index),
-                    title = player.name,
-                    subtitle = player.role,
-                    leading = {
-                        Box(
-                            modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(text = player.name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?", fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    onOpenProfile = { onOpenPlayer(player.id) }
                 )
             }
         }
+    }
+}
+
+/**
+ * One player's summary card on the Players tab — matches the reference app's row: an avatar +
+ * name + "Unregistered Player" badge up top (edit/delete icons alongside), a Matches/Runs/
+ * Wickets strip in the middle (from this team's shared `playerStats` lookup), and a row of C/VC/
+ * WK badges plus a "View Profile" button at the bottom. C and VC are real, tappable toggles
+ * (TeamRepository.toggleCaptain/toggleViceCaptain enforce "only one per team"); WK just reflects
+ * this player's saved role (PlayerRole.WICKET_KEEPER) rather than being independently toggleable,
+ * since that's a roster fact set when the player was added/edited, not a separate flag.
+ */
+@Composable
+private fun TeamPlayerRow(
+    player: PlayerEntity,
+    stats: com.mdlimonhossain.stumps.domain.repository.CareerStats,
+    modifier: Modifier = Modifier,
+    onOpenProfile: () -> Unit
+) {
+    val context = LocalContext.current
+    val app = context.applicationContext as StumpsApplication
+    val scope = rememberCoroutineScope()
+    var showInfo by remember { mutableStateOf(false) }
+    var showEdit by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    AppCard(modifier = modifier) {
+        Row(verticalAlignment = Alignment.Top) {
+            Box(
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(text = player.name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?", fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = player.name, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { showInfo = true }) {
+                    Text(text = "Unregistered Player", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    Spacer(Modifier.width(3.dp))
+                    Icon(
+                        imageVector = Icons.Filled.Info,
+                        contentDescription = "এর মানে কী?",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+            Icon(
+                imageVector = Icons.Filled.Edit,
+                contentDescription = "নাম পরিবর্তন করো",
+                modifier = Modifier.size(20.dp).clickable { showEdit = true }
+            )
+            Spacer(Modifier.width(14.dp))
+            Icon(
+                imageVector = Icons.Filled.Delete,
+                contentDescription = "খেলোয়াড় মুছে ফেলো",
+                modifier = Modifier.size(20.dp).clickable { showDeleteConfirm = true }
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            OverviewRecordStat("Matches", stats.matchesPlayed.toString())
+            OverviewRecordStat("Runs", stats.runs.toString())
+            OverviewRecordStat("Wickets", stats.wickets.toString())
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RoleBadgeCircle(label = "C", active = player.isCaptain) {
+                scope.launch { app.teamRepository.toggleCaptain(player) }
+            }
+            Spacer(Modifier.width(10.dp))
+            RoleBadgeCircle(label = "VC", active = player.isViceCaptain) {
+                scope.launch { app.teamRepository.toggleViceCaptain(player) }
+            }
+            Spacer(Modifier.width(10.dp))
+            RoleBadgeCircle(label = "WK", active = player.role == PlayerRole.WICKET_KEEPER.name, onClick = null)
+            Spacer(Modifier.weight(1f))
+            androidx.compose.material3.OutlinedButton(onClick = onOpenProfile) { Text("View Profile") }
+        }
+    }
+
+    if (showInfo) {
+        AlertDialog(
+            onDismissRequest = { showInfo = false },
+            title = { Text("Unregistered Player") },
+            text = { Text("এই খেলোয়াড়কে শুধু নাম দিয়ে টিমে যোগ করা হয়েছে — এটা কোনো real Stumps অ্যাকাউন্টের সাথে যুক্ত না।") },
+            confirmButton = { TextButton(onClick = { showInfo = false }) { Text("বুঝেছি") } }
+        )
+    }
+    if (showEdit) {
+        var newName by remember { mutableStateOf(player.name) }
+        AlertDialog(
+            onDismissRequest = { showEdit = false },
+            title = { Text("নাম পরিবর্তন করো") },
+            text = {
+                OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = newName.isNotBlank(),
+                    onClick = { scope.launch { app.teamRepository.renamePlayer(player, newName.trim()) }; showEdit = false }
+                ) { Text("সেভ করো") }
+            },
+            dismissButton = { TextButton(onClick = { showEdit = false }) { Text("বাতিল") } }
+        )
+    }
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("খেলোয়াড় মুছে ফেলবে?") },
+            text = { Text("${player.name}-কে এই টিম থেকে স্থায়ীভাবে মুছে ফেলা হবে।") },
+            confirmButton = {
+                TextButton(onClick = { scope.launch { app.teamRepository.deletePlayer(player) }; showDeleteConfirm = false }) {
+                    Text("মুছে ফেলো", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("বাতিল") } }
+        )
+    }
+}
+
+/** One small circular C/VC/WK badge — filled when active, just outlined when not. `onClick` null means it's a read-only indicator (used for WK, which just mirrors the player's saved role). */
+@Composable
+private fun RoleBadgeCircle(label: String, active: Boolean, onClick: (() -> Unit)?) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
+            .border(width = 1.dp, color = MaterialTheme.colorScheme.outline, shape = CircleShape)
+            .let { if (onClick != null) it.clickable(onClick = onClick) else it },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -384,11 +575,19 @@ private fun AddPlayerDialog(onDismiss: () -> Unit, onAdd: (name: String) -> Unit
     )
 }
 
-/** TEAM/BAT/BOWL/FIELD/MVP sub-tabs — every one of them genuinely has no data to show yet
- * without a team-level match history, so this matches the reference app's OWN "No data to show"
- * empty state rather than trying to invent a fuller table full of zeroes. */
+/**
+ * TEAM/BAT/BOWL/FIELD/MVP sub-tabs — all real now: TEAM shows the win/loss record computed by
+ * MatchRepository.teamRecord, and BAT/BOWL/FIELD/MVP each rank this team's own roster by their
+ * career stats (the same numbers the Players tab's summary cards use). MVP ranks by a simple,
+ * clearly-labelled composite score (runs + wickets×20 + fielding dismissals×10) rather than any
+ * official statistic, since cricket has no single standard "who was the MVP" formula.
+ */
 @Composable
-private fun TeamStatisticsTab() {
+private fun TeamStatisticsTab(
+    players: List<PlayerEntity>,
+    playerStats: Map<String, com.mdlimonhossain.stumps.domain.repository.CareerStats>,
+    teamRecord: com.mdlimonhossain.stumps.domain.repository.TeamRecord?
+) {
     var subTab by remember { mutableStateOf(0) }
     val subTabs = listOf("TEAM", "BAT", "BOWL", "FIELD", "MVP")
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
@@ -397,33 +596,161 @@ private fun TeamStatisticsTab() {
                 AnimatedTabChip(label, subTab == index) { subTab = index }
             }
         }
-        Spacer(Modifier.height(24.dp))
-        EmptyState(icon = Icons.Filled.Star, title = "No data to show.")
+        Spacer(Modifier.height(20.dp))
+
+        when (subTab) {
+            0 -> {
+                if (teamRecord == null || teamRecord.played == 0) {
+                    EmptyState(icon = Icons.Filled.Star, title = "No data to show.", subtitle = "এই টিম দিয়ে ম্যাচ খেললে win/loss রেকর্ড এখানে দেখা যাবে।")
+                } else {
+                    AppCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            OverviewRecordStat("Played", teamRecord.played.toString())
+                            OverviewRecordStat("Won", teamRecord.won.toString())
+                            OverviewRecordStat("Lost", teamRecord.lost.toString())
+                            OverviewRecordStat("Tied", teamRecord.tied.toString())
+                            OverviewRecordStat("Win %", com.mdlimonhossain.stumps.ui.designsystem.oneDecimal(teamRecord.winPercent))
+                        }
+                    }
+                }
+            }
+            1 -> PlayerStatRankingList(players, playerStats, sortBy = { it.runs }) { s -> "Runs: ${s.runs} • Avg: ${com.mdlimonhossain.stumps.ui.designsystem.oneDecimal(s.battingAverage)} • HS: ${s.highScore}" }
+            2 -> PlayerStatRankingList(players, playerStats, sortBy = { it.wickets }) { s -> "Wickets: ${s.wickets} • Avg: ${if (s.wickets == 0) "-" else com.mdlimonhossain.stumps.ui.designsystem.oneDecimal(s.bowlingAverage)} • Best: ${s.bestBowlingFigures}" }
+            3 -> PlayerStatRankingList(players, playerStats, sortBy = { it.catches + it.stumpings + it.runOuts }) { s -> "Catches: ${s.catches} • Stumpings: ${s.stumpings} • Runouts: ${s.runOuts}" }
+            4 -> {
+                Text(
+                    text = "MVP Points = Runs + (Wickets × 20) + (Catches+Stumpings+Runouts × 10) — একটা সহজ মিলিত স্কোর, কোনো official cricket পরিসংখ্যান না।",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                PlayerStatRankingList(
+                    players, playerStats,
+                    sortBy = { it.runs + it.wickets * 20 + (it.catches + it.stumpings + it.runOuts) * 10 }
+                ) { s -> "MVP Points: ${s.runs + s.wickets * 20 + (s.catches + s.stumpings + s.runOuts) * 10}" }
+            }
+        }
     }
 }
 
-/** Search box + "select one of my teams" — same treatment as ProfileScreen's Compare tab: the
- * UI structure is real, but actually comparing two teams' numbers needs a team search/lookup
- * this app doesn't have yet, so no comparison can actually run yet. */
+/** A players-of-this-team list ranked highest-first by whatever `sortBy` extracts from their CareerStats, with a caller-chosen subtitle line. Shared by all four ranked Statistics sub-tabs above. */
 @Composable
-private fun TeamCompareTab(team: TeamEntity) {
+private fun PlayerStatRankingList(
+    players: List<PlayerEntity>,
+    playerStats: Map<String, com.mdlimonhossain.stumps.domain.repository.CareerStats>,
+    sortBy: (com.mdlimonhossain.stumps.domain.repository.CareerStats) -> Int,
+    subtitleFor: (com.mdlimonhossain.stumps.domain.repository.CareerStats) -> String
+) {
+    if (players.isEmpty()) {
+        EmptyState(icon = Icons.Filled.AccountBox, title = "No Players", subtitle = "এই টিমে এখনো কোনো খেলোয়াড় যোগ করা হয়নি।")
+        return
+    }
+    val ranked = players
+        .map { it to (playerStats[it.id] ?: com.mdlimonhossain.stumps.domain.repository.CareerStats()) }
+        .sortedByDescending { (_, stats) -> sortBy(stats) }
+    ranked.forEachIndexed { index, (player, stats) ->
+        ListItemCard(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).staggeredEntrance(index),
+            title = "${index + 1}. ${player.name}",
+            subtitle = subtitleFor(stats)
+        )
+    }
+}
+
+/**
+ * A search box to find another of the viewer's OWN saved teams, then a real side-by-side
+ * Played/Won/Lost/Win% comparison against this team — both computed with the same
+ * MatchRepository.teamRecord used by the TEAM stats sub-tab above.
+ */
+@Composable
+private fun TeamCompareTab(team: TeamEntity, ourRecord: com.mdlimonhossain.stumps.domain.repository.TeamRecord?, viewerUid: String) {
+    val context = LocalContext.current
+    val app = context.applicationContext as StumpsApplication
     var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<TeamEntity>>(emptyList()) }
+    var selected by remember { mutableStateOf<TeamEntity?>(null) }
+    var selectedRecord by remember { mutableStateOf<com.mdlimonhossain.stumps.domain.repository.TeamRecord?>(null) }
+
+    LaunchedEffect(query) {
+        results = if (query.isBlank()) emptyList() else app.teamRepository.searchByName(viewerUid, query).filter { it.id != team.id }
+    }
+    LaunchedEffect(selected) {
+        selectedRecord = selected?.let { app.matchRepository.teamRecord(it.id) }
+    }
+
+    val other = selected
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("Search a Team") },
-            leadingIcon = { Icon(imageVector = Icons.Filled.Search, contentDescription = null) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(24.dp))
-        Text(
-            text = "Search a team to compare, or use one of your own teams (currently: ${team.name}).",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-        )
+        if (other == null) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Search a Team") },
+                leadingIcon = { Icon(imageVector = Icons.Filled.Search, contentDescription = null) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(16.dp))
+            if (query.isBlank()) {
+                Text(
+                    text = "নিজের সেভ করা অন্য কোনো টিমের নাম লিখে তুলনা করো।",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            } else if (results.isEmpty()) {
+                Text(
+                    text = "কোনো টিম পাওয়া যায়নি।",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            } else {
+                results.forEach { candidate ->
+                    ListItemCard(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        title = candidate.name,
+                        subtitle = candidate.location,
+                        onClick = { selected = candidate }
+                    )
+                }
+            }
+        } else {
+            TextButton(onClick = { selected = null; query = "" }) { Text("← অন্য টিম বেছে নাও") }
+            Spacer(Modifier.height(8.dp))
+            AppCard(modifier = Modifier.fillMaxWidth()) {
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(text = team.name, fontWeight = FontWeight.Bold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        Spacer(Modifier.height(12.dp))
+                        CompareRecordColumn(ourRecord)
+                    }
+                    Spacer(Modifier.width(1.dp).height(80.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(text = other.name, fontWeight = FontWeight.Bold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        Spacer(Modifier.height(12.dp))
+                        CompareRecordColumn(selectedRecord)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompareRecordColumn(record: com.mdlimonhossain.stumps.domain.repository.TeamRecord?) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        CompareRecordRow("Played", record?.played?.toString() ?: "-")
+        CompareRecordRow("Won", record?.won?.toString() ?: "-")
+        CompareRecordRow("Lost", record?.lost?.toString() ?: "-")
+        CompareRecordRow("Win %", record?.let { com.mdlimonhossain.stumps.ui.designsystem.oneDecimal(it.winPercent) } ?: "-")
+    }
+}
+
+@Composable
+private fun CompareRecordRow(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 4.dp)) {
+        Text(text = value, fontWeight = FontWeight.Bold)
+        Text(text = label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

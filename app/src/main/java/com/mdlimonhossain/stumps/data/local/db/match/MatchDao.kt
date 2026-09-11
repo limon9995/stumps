@@ -44,10 +44,20 @@ interface PlayerDao {
     @Upsert
     suspend fun upsertAll(players: List<PlayerEntity>)
 
-    @Query("SELECT * FROM players WHERE teamId = :teamId")
+    // Saves just ONE player — used by rename, and by the captain/vice-captain toggles.
+    @Upsert
+    suspend fun upsert(player: PlayerEntity)
+
+    @Delete
+    suspend fun delete(player: PlayerEntity)
+
+    @Query("SELECT * FROM players WHERE id = :id")
+    suspend fun getById(id: String): PlayerEntity?
+
+    @Query("SELECT * FROM players WHERE teamId = :teamId ORDER BY name")
     fun observePlayersForTeam(teamId: String): Flow<List<PlayerEntity>>
 
-    @Query("SELECT * FROM players WHERE teamId = :teamId")
+    @Query("SELECT * FROM players WHERE teamId = :teamId ORDER BY name")
     suspend fun getPlayersForTeamOnce(teamId: String): List<PlayerEntity>
 
     // A case-insensitive "contains" search across every player on any of ONE user's own saved
@@ -60,6 +70,15 @@ interface PlayerDao {
             "ORDER BY players.name"
     )
     suspend fun searchByNameForUser(uid: String, query: String): List<PlayerEntity>
+
+    // Clears the captain/vice-captain flag off every OTHER player on a team, right before setting
+    // it on a new one — this is what keeps "at most one captain per team" true, since a plain
+    // @Upsert on just the newly-chosen player wouldn't touch the previous captain's row at all.
+    @Query("UPDATE players SET isCaptain = 0 WHERE teamId = :teamId")
+    suspend fun clearCaptain(teamId: String)
+
+    @Query("UPDATE players SET isViceCaptain = 0 WHERE teamId = :teamId")
+    suspend fun clearViceCaptain(teamId: String)
 }
 
 @Dao
@@ -84,6 +103,12 @@ interface MatchDao {
     // the "lookup" that lets a team's own detail page show its match history, newest first.
     @Query("SELECT * FROM matches WHERE teamAId = :teamId OR teamBId = :teamId ORDER BY createdAt DESC")
     fun observeMatchesForTeam(teamId: String): Flow<List<MatchEntity>>
+
+    // One-shot version of the query above — used when working out a team's overall win/loss
+    // record (see MatchRepository.teamRecord), which just needs to loop through the list once
+    // rather than staying subscribed to future changes.
+    @Query("SELECT * FROM matches WHERE teamAId = :teamId OR teamBId = :teamId ORDER BY createdAt DESC")
+    suspend fun getMatchesForTeamOnce(teamId: String): List<MatchEntity>
 }
 
 @Dao

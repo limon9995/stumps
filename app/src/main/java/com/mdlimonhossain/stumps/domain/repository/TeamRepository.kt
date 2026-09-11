@@ -21,6 +21,7 @@ class TeamRepository(
     fun observeTeamsForUser(uid: String): Flow<List<TeamEntity>> = teamDao.observeTeamsForUser(uid)
     fun observePlayersForTeam(teamId: String): Flow<List<PlayerEntity>> = playerDao.observePlayersForTeam(teamId)
     suspend fun getTeamOnce(teamId: String): TeamEntity? = teamDao.getById(teamId)
+    suspend fun getPlayerOnce(playerId: String): PlayerEntity? = playerDao.getById(playerId)
     suspend fun getPlayersOnce(teamId: String): List<PlayerEntity> = playerDao.getPlayersForTeamOnce(teamId)
     suspend fun searchByName(uid: String, query: String): List<TeamEntity> = teamDao.searchByName(uid, query)
     suspend fun searchPlayersByName(uid: String, query: String): List<PlayerEntity> = playerDao.searchByNameForUser(uid, query)
@@ -52,6 +53,33 @@ class TeamRepository(
     /** Renames a team — `.copy(name = newName)` makes a new copy of the team with just the name changed. */
     suspend fun renameTeam(team: TeamEntity, newName: String) {
         teamDao.upsert(team.copy(name = newName))
+    }
+
+    /** Renames one player — used by the pencil/edit icon on a team's Players tab. */
+    suspend fun renamePlayer(player: PlayerEntity, newName: String) {
+        playerDao.upsert(player.copy(name = newName))
+    }
+
+    /** Permanently removes one player from their team — used by the trash/delete icon on a team's Players tab. */
+    suspend fun deletePlayer(player: PlayerEntity) {
+        playerDao.delete(player)
+    }
+
+    /**
+     * Turns the captain badge ("C") on or off for one player. Tapping the badge of the CURRENT
+     * captain turns it off again (nobody is captain); tapping any other player's badge makes them
+     * the new captain and automatically clears the old one, since only one player per team can
+     * hold the role at a time.
+     */
+    suspend fun toggleCaptain(player: PlayerEntity) {
+        playerDao.clearCaptain(player.teamId)
+        if (!player.isCaptain) playerDao.upsert(player.copy(isCaptain = true))
+    }
+
+    /** Same idea as toggleCaptain, but for the vice-captain ("VC") badge. */
+    suspend fun toggleViceCaptain(player: PlayerEntity) {
+        playerDao.clearViceCaptain(player.teamId)
+        if (!player.isViceCaptain) playerDao.upsert(player.copy(isViceCaptain = true))
     }
 
     /** Updates a team's name AND location together — used by Team Settings' Save button. */

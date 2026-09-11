@@ -49,6 +49,7 @@ import com.mdlimonhossain.stumps.ui.search.SearchScreen
 import com.mdlimonhossain.stumps.ui.settings.SettingsScreen
 import com.mdlimonhossain.stumps.ui.settings.ThisDeviceScreen
 import com.mdlimonhossain.stumps.ui.social.FollowingScreen
+import com.mdlimonhossain.stumps.ui.team.PlayerProfileScreen
 import com.mdlimonhossain.stumps.ui.team.TeamDetailScreen
 import com.mdlimonhossain.stumps.ui.team.TeamManagementScreen
 import com.mdlimonhossain.stumps.ui.tournament.TournamentDetailScreen
@@ -279,8 +280,14 @@ private fun MainAppNavHost(
                     viewerUid = currentUid,
                     onBack = { navController.popBackStack() },
                     onOpenMatch = { matchId -> navController.navigate(Destinations.history(matchId)) },
-                    onOpenTournament = { tournamentId -> navController.navigate(Destinations.tournamentDetail(tournamentId)) }
+                    onOpenTournament = { tournamentId -> navController.navigate(Destinations.tournamentDetail(tournamentId)) },
+                    onOpenPlayer = { playerId -> navController.navigate(Destinations.playerProfile(playerId)) }
                 )
+            }
+
+            composable(route = Destinations.PlayerProfileRoute, arguments = Destinations.playerProfileArgs) { backStackEntry ->
+                val playerId = backStackEntry.arguments?.getString("playerId") ?: return@composable
+                PlayerProfileScreen(playerId = playerId, viewerUid = currentUid, onBack = { navController.popBackStack() })
             }
 
             composable(route = Destinations.TournamentsRoute, arguments = Destinations.tournamentsArgs) { backStackEntry ->

@@ -64,6 +64,11 @@ object Destinations {
     fun teamDetail(teamId: String) = "team_detail/$teamId"
     val teamDetailArgs = listOf(navArgument("teamId") { type = NavType.StringType })
 
+    // A saved team's own player, reached by tapping "View Profile" on that team's Players tab.
+    const val PlayerProfileRoute = "player_profile/{playerId}"
+    fun playerProfile(playerId: String) = "player_profile/$playerId"
+    val playerProfileArgs = listOf(navArgument("playerId") { type = NavType.StringType })
+
     // These three "preview" screens show ANOTHER user's club/tournament/match, found via
     // Search — kept as their own separate destinations (rather than reusing Clubs/Tournaments/
     // History above) because those three always show the SIGNED-IN user's own things.

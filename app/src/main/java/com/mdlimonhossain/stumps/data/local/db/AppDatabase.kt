@@ -50,7 +50,7 @@ import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentTeamEntity
         ClubEntity::class,
         FollowEntity::class
     ],
-    version = 4, // bumped from 3 when teams.location was added
+    version = 5, // bumped from 4 when players.isCaptain/isViceCaptain were added
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -94,6 +94,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Adds players.isCaptain/isViceCaptain — the C/VC toggle circles on a team's Players tab.
+        // SQLite has no real boolean type, so Room stores a Kotlin Boolean as an INTEGER column
+        // that's always 0 or 1 — "NOT NULL DEFAULT 0" means every existing player row instantly
+        // becomes "false" for both new columns, matching this entity's own `= false` defaults.
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE players ADD COLUMN isCaptain INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE players ADD COLUMN isViceCaptain INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         // We only ever want ONE database connection open at a time for the whole app — opening
         // multiple would waste memory and could cause weird bugs. @Volatile + synchronized here
         // is a standard Kotlin/Java pattern called a "singleton": the first time getInstance is
@@ -108,7 +119,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "stumps.db" // the actual filename this gets saved as on the phone's storage
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     // A real migration now exists for every version bump so far (see above). This
                     // destructive fallback only kicks in for a version jump nobody's written a
                     // migration for yet — every NEW schema change from here on should add its own
