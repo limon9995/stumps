@@ -49,6 +49,7 @@ fun MatchFlowScreen(currentUid: String, onFinished: () -> Unit) {
     // available because Kotlin knows for certain `s` is a Lineup at that point).
     when (val s = step) {
         is MatchFlowStep.Setup -> MatchSetupScreen(
+            uid = currentUid,
             onStartMatch = { input -> step = MatchFlowStep.Lineup(input) },
             onBack = onFinished
         )
