@@ -83,6 +83,29 @@ fun MatchSetupScreen(uid: String, onStartMatch: (QuickMatchInput) -> Unit, onBac
     var format by remember { mutableStateOf(MatchFormat.T20) }
     // Which slot's "pick a saved team" dialog is open right now, if any.
     var pickerFor by remember { mutableStateOf<TeamSlot?>(null) }
+    // Before the user taps "ম্যাচ শুরু করো" (start match) even once, we don't want to yell at
+    // them with red error text on a brand-new, still-empty form. So we only start showing the
+    // red "this is wrong" messages AFTER they've tried to submit at least once. This flag flips
+    // to true the first time they tap the button while something is still missing.
+    var attemptedSubmit by remember { mutableStateOf(false) }
+
+    // Turn the raw multi-line text boxes into clean lists of names: split by line, trim
+    // any extra spaces, and throw away any blank lines. We work these out up here (instead of
+    // down near the button) because the error messages under each text field, further down,
+    // need to know these numbers too.
+    val teamAPlayers = teamAPlayersText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    val teamBPlayers = teamBPlayersText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    val overs = oversText.toIntOrNull() ?: 0
+    // Each of these is "is this one thing wrong on its own" — used to decide which field gets
+    // a red error message. A team is "too short" if it has fewer than 2 players, since you
+    // can't really play cricket with just one person on a side.
+    val teamANameMissing = teamAName.isBlank()
+    val teamBNameMissing = teamBName.isBlank()
+    val teamATooShort = teamAPlayers.size < 2
+    val teamBTooShort = teamBPlayers.size < 2
+    val oversInvalid = overs <= 0
+    // The whole form only makes sense once none of the problems above are true.
+    val isValid = !teamANameMissing && !teamBNameMissing && !teamATooShort && !teamBTooShort && !oversInvalid
 
     pickerFor?.let { slot ->
         SavedTeamPickerDialog(
@@ -126,7 +149,21 @@ fun MatchSetupScreen(uid: String, onStartMatch: (QuickMatchInput) -> Unit, onBac
             Text("সেভ করা টিম থেকে বেছে নাও")
         }
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(value = teamAName, onValueChange = { teamAName = it }, label = { Text("দলের নাম") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = teamAName,
+            onValueChange = { teamAName = it },
+            label = { Text("দলের নাম") },
+            // isError just turns the field's outline and label red — Compose does that part for us.
+            // We only turn it on once the user has tried to submit, so a fresh empty form doesn't
+            // look broken before they've even started typing.
+            isError = attemptedSubmit && teamANameMissing,
+            supportingText = {
+                if (attemptedSubmit && teamANameMissing) {
+                    Text("দল ১ এর নাম লিখতে হবে")
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(8.dp))
         // Players are typed in as one big block of text, one name per line — simpler than
         // building a whole "add player" button/list UI for this quick, throwaway match form.
@@ -137,6 +174,14 @@ fun MatchSetupScreen(uid: String, onStartMatch: (QuickMatchInput) -> Unit, onBac
             onValueChange = { teamAPlayersText = it },
             label = { Text("প্লেয়ারদের নাম (এক লাইনে একজন)") },
             minLines = 4,
+            isError = attemptedSubmit && teamATooShort,
+            supportingText = {
+                // This message tells them exactly how many more names they need to add, instead
+                // of just saying "something's wrong" — much easier to fix.
+                if (attemptedSubmit && teamATooShort) {
+                    Text("অন্তত ২ জন প্লেয়ার লাগবে (এখন আছে ${teamAPlayers.size} জন)")
+                }
+            },
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -146,13 +191,30 @@ fun MatchSetupScreen(uid: String, onStartMatch: (QuickMatchInput) -> Unit, onBac
             Text("সেভ করা টিম থেকে বেছে নাও")
         }
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(value = teamBName, onValueChange = { teamBName = it }, label = { Text("দলের নাম") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = teamBName,
+            onValueChange = { teamBName = it },
+            label = { Text("দলের নাম") },
+            isError = attemptedSubmit && teamBNameMissing,
+            supportingText = {
+                if (attemptedSubmit && teamBNameMissing) {
+                    Text("দল ২ এর নাম লিখতে হবে")
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = teamBPlayersText,
             onValueChange = { teamBPlayersText = it },
             label = { Text("প্লেয়ারদের নাম (এক লাইনে একজন)") },
             minLines = 4,
+            isError = attemptedSubmit && teamBTooShort,
+            supportingText = {
+                if (attemptedSubmit && teamBTooShort) {
+                    Text("অন্তত ২ জন প্লেয়ার লাগবে (এখন আছে ${teamBPlayers.size} জন)")
+                }
+            },
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -162,6 +224,12 @@ fun MatchSetupScreen(uid: String, onStartMatch: (QuickMatchInput) -> Unit, onBac
             onValueChange = { oversText = it },
             label = { Text("কত ওভারের ম্যাচ") },
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+            isError = attemptedSubmit && oversInvalid,
+            supportingText = {
+                if (attemptedSubmit && oversInvalid) {
+                    Text("কত ওভারের ম্যাচ হবে সেটা ০ এর বেশি একটা সংখ্যায় লিখো")
+                }
+            },
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -201,25 +269,33 @@ fun MatchSetupScreen(uid: String, onStartMatch: (QuickMatchInput) -> Unit, onBac
         }
 
         Spacer(Modifier.height(28.dp))
-        // Turn the raw multi-line text boxes into clean lists of names: split by line, trim
-        // any extra spaces, and throw away any blank lines.
-        val teamAPlayers = teamAPlayersText.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        val teamBPlayers = teamBPlayersText.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        val overs = oversText.toIntOrNull() ?: 0
-        // The "ম্যাচ শুরু করো" button only becomes tappable once the form actually makes sense:
-        // both team names filled in, at least 2 players each, and a real overs number.
-        val isValid = teamAName.isNotBlank() && teamBName.isNotBlank() &&
-            teamAPlayers.size >= 2 && teamBPlayers.size >= 2 && overs > 0
+        // If they've already tried to submit once and the form is still broken, show one more
+        // plain-language summary above the button — so it's obvious at a glance that something
+        // still needs fixing, on top of the specific red messages under each field.
+        if (attemptedSubmit && !isValid) {
+            Text(
+                text = "উপরে লাল করে দেখানো জায়গাগুলো ঠিক করো, তারপর আবার চেষ্টা করো।",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(8.dp))
+        }
 
         Button(
-            enabled = isValid,
+            // The button is now ALWAYS tappable — no more silently greyed-out button that gives
+            // no clue why it won't work. Tapping it while the form is incomplete just switches on
+            // "attemptedSubmit", which lights up the red error messages above so the user can see
+            // exactly what to fix.
             onClick = {
-                onStartMatch(
-                    QuickMatchInput(
-                        teamAName, teamAPlayers, teamBName, teamBPlayers,
-                        overs, tossWinnerIsTeamA, tossDecisionIsBat, format
+                attemptedSubmit = true
+                if (isValid) {
+                    onStartMatch(
+                        QuickMatchInput(
+                            teamAName, teamAPlayers, teamBName, teamBPlayers,
+                            overs, tossWinnerIsTeamA, tossDecisionIsBat, format
+                        )
                     )
-                )
+                }
             },
             modifier = Modifier.fillMaxWidth()
         ) {
