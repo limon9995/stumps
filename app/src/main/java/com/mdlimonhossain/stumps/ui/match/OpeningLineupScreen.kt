@@ -44,6 +44,14 @@ fun OpeningLineupScreen(
     var striker by remember { mutableStateOf(battingTeamPlayers.getOrElse(0) { "" }) }
     var nonStriker by remember { mutableStateOf(battingTeamPlayers.getOrElse(1) { "" }) }
     var bowler by remember { mutableStateOf(bowlingTeamPlayers.getOrElse(0) { "" }) }
+    // Only shows the red error messages after the user has tried to tap "স্কোরিং শুরু করো" once.
+    var attemptedSubmit by remember { mutableStateOf(false) }
+
+    val strikerMissing = striker.isBlank()
+    val nonStrikerMissing = nonStriker.isBlank()
+    val bowlerMissing = bowler.isBlank()
+    val sameBatsmanTwice = striker.isNotBlank() && striker == nonStriker
+    val isValid = !strikerMissing && !nonStrikerMissing && !bowlerMissing && !sameBatsmanTwice
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         TextButton(onClick = onBack) { Text("← ফিরে যাও") }
@@ -51,18 +59,44 @@ fun OpeningLineupScreen(
         Text(text = "$battingTeamName ব্যাটিং করছে, $bowlingTeamName বোলিং", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(20.dp))
 
-        NameDropdown("স্ট্রাইকার ব্যাটসম্যান", battingTeamPlayers, striker) { striker = it }
+        NameDropdown(
+            label = "স্ট্রাইকার ব্যাটসম্যান",
+            options = battingTeamPlayers,
+            selected = striker,
+            isError = attemptedSubmit && strikerMissing,
+            errorText = if (attemptedSubmit && strikerMissing) "একজন স্ট্রাইকার বেছে নাও" else null
+        ) { striker = it }
         Spacer(Modifier.height(12.dp))
         // The non-striker dropdown excludes whoever is already picked as striker — one person
         // obviously can't bat at both ends at once.
-        NameDropdown("নন-স্ট্রাইকার ব্যাটসম্যান", battingTeamPlayers.filter { it != striker }, nonStriker) { nonStriker = it }
+        NameDropdown(
+            label = "নন-স্ট্রাইকার ব্যাটসম্যান",
+            options = battingTeamPlayers.filter { it != striker },
+            selected = nonStriker,
+            isError = attemptedSubmit && (nonStrikerMissing || sameBatsmanTwice),
+            errorText = when {
+                attemptedSubmit && sameBatsmanTwice -> "স্ট্রাইকার আর নন-স্ট্রাইকার একই লোক হতে পারে না"
+                attemptedSubmit && nonStrikerMissing -> "একজন নন-স্ট্রাইকার বেছে নাও"
+                else -> null
+            }
+        ) { nonStriker = it }
         Spacer(Modifier.height(12.dp))
-        NameDropdown("ওপেনিং বোলার", bowlingTeamPlayers, bowler) { bowler = it }
+        NameDropdown(
+            label = "ওপেনিং বোলার",
+            options = bowlingTeamPlayers,
+            selected = bowler,
+            isError = attemptedSubmit && bowlerMissing,
+            errorText = if (attemptedSubmit && bowlerMissing) "একজন বোলার বেছে নাও" else null
+        ) { bowler = it }
 
         Spacer(Modifier.height(28.dp))
+        // Always tappable — tapping while something's missing just turns on the red messages
+        // above instead of the button silently doing nothing.
         Button(
-            enabled = striker.isNotBlank() && nonStriker.isNotBlank() && bowler.isNotBlank() && striker != nonStriker,
-            onClick = { onConfirm(striker, nonStriker, bowler) },
+            onClick = {
+                attemptedSubmit = true
+                if (isValid) onConfirm(striker, nonStriker, bowler)
+            },
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("স্কোরিং শুরু করো")
@@ -81,7 +115,14 @@ fun battingIsTeamA(input: QuickMatchInput): Boolean =
 /** A tap-to-pick dropdown for choosing one name from a list — used for all three player pickers above. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NameDropdown(label: String, options: List<String>, selected: String, onSelected: (String) -> Unit) {
+private fun NameDropdown(
+    label: String,
+    options: List<String>,
+    selected: String,
+    isError: Boolean = false,
+    errorText: String? = null,
+    onSelected: (String) -> Unit
+) {
     var expanded by remember { mutableStateOf(false) } // is the dropdown list currently open?
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         // This text field LOOKS like a normal one, but readOnly = true means the user can't
@@ -92,6 +133,8 @@ private fun NameDropdown(label: String, options: List<String>, selected: String,
             readOnly = true,
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            isError = isError,
+            supportingText = { errorText?.let { Text(it) } },
             modifier = Modifier.fillMaxWidth().menuAnchor()
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {

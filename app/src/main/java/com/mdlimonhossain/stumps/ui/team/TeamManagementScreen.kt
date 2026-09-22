@@ -122,17 +122,29 @@ private fun TeamRow(uid: String, team: TeamEntity, modifier: Modifier = Modifier
 private fun CreateTeamForm(onCancel: () -> Unit, onCreate: (name: String, location: String?) -> Unit) {
     var name by remember { mutableStateOf("") }
     var location by remember { mutableStateOf("") }
+    // Only shows the red "name is required" message after the user has tried to save once.
+    var attemptedSubmit by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Text(text = "নতুন টিম", style = MaterialTheme.typography.headlineLarge)
         Spacer(Modifier.height(16.dp))
-        OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("টিমের নাম") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("টিমের নাম") },
+            isError = attemptedSubmit && name.isBlank(),
+            supportingText = { if (attemptedSubmit && name.isBlank()) Text("টিমের নাম লিখতে হবে") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(value = location, onValueChange = { location = it }, label = { Text("এলাকা / শহর (ঐচ্ছিক)") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(20.dp))
+        // Always tappable — tapping with a blank name just lights up the red message above.
         Button(
-            enabled = name.isNotBlank(),
-            onClick = { onCreate(name.trim(), location.trim().ifBlank { null }) },
+            onClick = {
+                attemptedSubmit = true
+                if (name.isNotBlank()) onCreate(name.trim(), location.trim().ifBlank { null })
+            },
             modifier = Modifier.fillMaxWidth()
         ) { Text("সেভ করো") }
         Spacer(Modifier.height(8.dp))

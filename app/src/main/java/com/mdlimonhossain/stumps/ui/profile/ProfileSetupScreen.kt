@@ -38,6 +38,8 @@ fun ProfileSetupScreen(
 ) {
     var name by remember { mutableStateOf(initialName) }
     var role by remember { mutableStateOf(initialRole) }
+    // Only shows the red "name is required" message after the user has tried to continue once.
+    var attemptedSubmit by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         // Only shown when this screen is being used to EDIT an existing profile — the
@@ -51,6 +53,8 @@ fun ProfileSetupScreen(
             value = name,
             onValueChange = { name = it },
             label = { Text("তোমার নাম") },
+            isError = attemptedSubmit && name.isBlank(),
+            supportingText = { if (attemptedSubmit && name.isBlank()) Text("চালিয়ে যেতে তোমার নাম লিখতে হবে") },
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(20.dp))
@@ -69,9 +73,13 @@ fun ProfileSetupScreen(
         }
 
         Spacer(Modifier.height(24.dp))
+        // Always tappable now — tapping with a blank name just turns on the red message above
+        // instead of the button silently refusing to do anything.
         Button(
-            onClick = { onComplete(name, role) },
-            enabled = name.isNotBlank(), // stop people continuing with a blank name
+            onClick = {
+                attemptedSubmit = true
+                if (name.isNotBlank()) onComplete(name, role)
+            },
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("শুরু করি")

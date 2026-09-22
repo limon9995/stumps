@@ -41,6 +41,8 @@ fun WatchLiveScreen(onBack: () -> Unit) {
     var searching by remember { mutableStateOf(false) } // true while we're looking the code up in Firestore
     var notFound by remember { mutableStateOf(false) }
     var match by remember { mutableStateOf<PublicLiveMatch?>(null) } // set once a matching live match is found
+    // Turns on the red "type a code first" message once they've tapped "দেখো" with nothing typed.
+    var attemptedSubmit by remember { mutableStateOf(false) }
 
     // Once a match is found, show the actual live scoreboard instead of the code-entry form.
     if (match != null) {
@@ -57,14 +59,22 @@ fun WatchLiveScreen(onBack: () -> Unit) {
             value = code,
             onValueChange = { code = it.uppercase(); notFound = false }, // always keep the code uppercase, matching how it was generated
             label = { Text("শেয়ার কোড") },
+            isError = attemptedSubmit && code.isBlank(),
+            supportingText = { if (attemptedSubmit && code.isBlank()) Text("আগে শেয়ার কোডটা লিখতে হবে") },
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(12.dp))
+        // Only disabled WHILE an actual search is running (there's a visible spinner for that,
+        // so it's not a silent disable) — otherwise always tappable, and tapping with a blank
+        // code just shows the red message above instead of doing nothing.
         Button(
-            enabled = code.isNotBlank() && !searching,
+            enabled = !searching,
             onClick = {
-                searching = true
-                notFound = false
+                attemptedSubmit = true
+                if (code.isNotBlank()) {
+                    searching = true
+                    notFound = false
+                }
             },
             modifier = Modifier.fillMaxWidth()
         ) { Text("দেখো") }

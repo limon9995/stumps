@@ -427,16 +427,31 @@ private fun TeamPlayerRow(
     }
     if (showEdit) {
         var newName by remember { mutableStateOf(player.name) }
+        // Turns on the red "name required" message once they've tried to save with it blank.
+        var attemptedSubmit by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { showEdit = false },
             title = { Text("নাম পরিবর্তন করো") },
             text = {
-                OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    singleLine = true,
+                    isError = attemptedSubmit && newName.isBlank(),
+                    supportingText = { if (attemptedSubmit && newName.isBlank()) Text("নাম খালি রাখা যাবে না") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             },
             confirmButton = {
+                // Always tappable — tapping with a blank name just shows the red message above.
                 TextButton(
-                    enabled = newName.isNotBlank(),
-                    onClick = { scope.launch { app.teamRepository.renamePlayer(player, newName.trim()) }; showEdit = false }
+                    onClick = {
+                        attemptedSubmit = true
+                        if (newName.isNotBlank()) {
+                            scope.launch { app.teamRepository.renamePlayer(player, newName.trim()) }
+                            showEdit = false
+                        }
+                    }
                 ) { Text("সেভ করো") }
             },
             dismissButton = { TextButton(onClick = { showEdit = false }) { Text("বাতিল") } }
@@ -556,6 +571,8 @@ private fun TeamTournamentsTab(tournaments: List<TournamentEntity>, onOpenTourna
 @Composable
 private fun AddPlayerDialog(onDismiss: () -> Unit, onAdd: (name: String) -> Unit) {
     var name by remember { mutableStateOf("") }
+    // Turns on the red "name required" message once they've tried to add with it blank.
+    var attemptedSubmit by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("নতুন খেলোয়াড়") },
@@ -565,11 +582,19 @@ private fun AddPlayerDialog(onDismiss: () -> Unit, onAdd: (name: String) -> Unit
                 onValueChange = { name = it },
                 label = { Text("পুরো নাম") },
                 singleLine = true,
+                isError = attemptedSubmit && name.isBlank(),
+                supportingText = { if (attemptedSubmit && name.isBlank()) Text("খেলোয়াড়ের নাম লিখতে হবে") },
                 modifier = Modifier.fillMaxWidth()
             )
         },
         confirmButton = {
-            TextButton(enabled = name.isNotBlank(), onClick = { onAdd(name.trim()) }) { Text("ADD / CREATE PLAYER") }
+            // Always tappable — tapping with a blank name just shows the red message above.
+            TextButton(
+                onClick = {
+                    attemptedSubmit = true
+                    if (name.isNotBlank()) onAdd(name.trim())
+                }
+            ) { Text("ADD / CREATE PLAYER") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("বাতিল") } }
     )
@@ -764,6 +789,8 @@ private fun TeamSettingsScreen(team: TeamEntity, onSave: (name: String, location
     var name by remember { mutableStateOf(team.name) }
     var location by remember { mutableStateOf(team.location ?: "") }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    // Only shows the red "name required" message after the user has tried to save once.
+    var attemptedSubmit by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -774,13 +801,23 @@ private fun TeamSettingsScreen(team: TeamEntity, onSave: (name: String, location
             TextButton(onClick = onClose) { Text("✕") }
         }
         Spacer(Modifier.height(20.dp))
-        OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Team Name") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("Team Name") },
+            isError = attemptedSubmit && name.isBlank(),
+            supportingText = { if (attemptedSubmit && name.isBlank()) Text("টিমের নাম খালি রাখা যাবে না") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(value = location, onValueChange = { location = it }, label = { Text("Location") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(24.dp))
+        // Always tappable — tapping with a blank name just shows the red message above.
         Button(
-            enabled = name.isNotBlank(),
-            onClick = { onSave(name.trim(), location.trim().ifBlank { null }) },
+            onClick = {
+                attemptedSubmit = true
+                if (name.isNotBlank()) onSave(name.trim(), location.trim().ifBlank { null })
+            },
             modifier = Modifier.fillMaxWidth()
         ) { Text("SAVE") }
     }

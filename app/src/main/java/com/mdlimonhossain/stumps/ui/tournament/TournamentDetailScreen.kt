@@ -329,12 +329,29 @@ private fun HomeTab(
 
     if (showRename) {
         var newName by remember { mutableStateOf(tournament.name) }
+        // Turns on the red "name required" message once they've tried to save with it blank.
+        var attemptedSubmit by remember { mutableStateOf(false) }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showRename = false },
             title = { Text("নাম পরিবর্তন করো") },
-            text = { OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true, modifier = Modifier.fillMaxWidth()) },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    singleLine = true,
+                    isError = attemptedSubmit && newName.isBlank(),
+                    supportingText = { if (attemptedSubmit && newName.isBlank()) Text("নাম খালি রাখা যাবে না") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
             confirmButton = {
-                TextButton(enabled = newName.isNotBlank(), onClick = { onRename(newName.trim()); showRename = false }) { Text("সেভ করো") }
+                // Always tappable — tapping with a blank name just shows the red message above.
+                TextButton(
+                    onClick = {
+                        attemptedSubmit = true
+                        if (newName.isNotBlank()) { onRename(newName.trim()); showRename = false }
+                    }
+                ) { Text("সেভ করো") }
             },
             dismissButton = { TextButton(onClick = { showRename = false }) { Text("বাতিল") } }
         )

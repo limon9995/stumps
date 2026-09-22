@@ -116,6 +116,15 @@ private fun RegisterClubForm(onCancel: () -> Unit, onRegister: (name: String, ci
     var city by remember { mutableStateOf("") }
     var yearText by remember { mutableStateOf("") }
     var ballType by remember { mutableStateOf("LEATHER") }
+    // Only starts showing red error text after the user has tapped "Register" at least once —
+    // so a fresh, still-empty form doesn't look broken before they've even started typing.
+    var attemptedSubmit by remember { mutableStateOf(false) }
+
+    val year = yearText.toIntOrNull() ?: 0
+    val nameMissing = name.isBlank()
+    val cityMissing = city.isBlank()
+    val yearInvalid = year !in 1800..2100
+    val isValid = !nameMissing && !cityMissing && !yearInvalid
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Text(text = "Register as club", style = MaterialTheme.typography.headlineLarge)
@@ -125,15 +134,31 @@ private fun RegisterClubForm(onCancel: () -> Unit, onRegister: (name: String, ci
             style = MaterialTheme.typography.bodyMedium
         )
         Spacer(Modifier.height(20.dp))
-        OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("ক্লাব/সংস্থার নাম") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("ক্লাব/সংস্থার নাম") },
+            isError = attemptedSubmit && nameMissing,
+            supportingText = { if (attemptedSubmit && nameMissing) Text("ক্লাব/সংস্থার নাম লিখতে হবে") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(value = city, onValueChange = { city = it }, label = { Text("শহর") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = city,
+            onValueChange = { city = it },
+            label = { Text("শহর") },
+            isError = attemptedSubmit && cityMissing,
+            supportingText = { if (attemptedSubmit && cityMissing) Text("শহরের নাম লিখতে হবে") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             value = yearText,
             onValueChange = { yearText = it },
             label = { Text("প্রতিষ্ঠার বছর") },
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+            isError = attemptedSubmit && yearInvalid,
+            supportingText = { if (attemptedSubmit && yearInvalid) Text("সঠিক একটা সাল লিখো (১৮০০ থেকে ২১০০ এর মধ্যে)") },
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(16.dp))
@@ -145,9 +170,23 @@ private fun RegisterClubForm(onCancel: () -> Unit, onRegister: (name: String, ci
         }
 
         Spacer(Modifier.height(24.dp))
-        val year = yearText.toIntOrNull() ?: 0
-        val isValid = name.isNotBlank() && city.isNotBlank() && year in 1800..2100
-        Button(enabled = isValid, onClick = { onRegister(name, city, year, ballType) }, modifier = Modifier.fillMaxWidth()) {
+        if (attemptedSubmit && !isValid) {
+            Text(
+                text = "উপরে লাল করে দেখানো জায়গাগুলো ঠিক করো, তারপর আবার চেষ্টা করো।",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        // Always tappable now — tapping while something's missing just switches on the red
+        // messages above instead of the button doing nothing with no explanation.
+        Button(
+            onClick = {
+                attemptedSubmit = true
+                if (isValid) onRegister(name, city, year, ballType)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Text("Register")
         }
         Spacer(Modifier.height(8.dp))

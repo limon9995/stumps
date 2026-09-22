@@ -179,17 +179,45 @@ private fun TournamentSetupForm(
     var showSeasonPicker by remember { mutableStateOf(false) }
     var showStartPicker by remember { mutableStateOf(false) }
     var showEndPicker by remember { mutableStateOf(false) }
+    // Only starts showing red error text once the user has tapped the create button at least
+    // once — a fresh form shouldn't look broken before anyone has typed anything.
+    var attemptedSubmit by remember { mutableStateOf(false) }
 
     val dateFormat = remember { SimpleDateFormat("d MMM yyyy", Locale.getDefault()) }
 
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)) {
         Text(text = "নতুন টুর্নামেন্ট", style = MaterialTheme.typography.headlineLarge)
         Spacer(Modifier.height(16.dp))
-        OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("টুর্নামেন্টের নাম") }, modifier = Modifier.fillMaxWidth())
+        val nameMissing = name.isBlank()
+        val clubNameMissing = clubName.isBlank()
+        val cityMissing = city.isBlank()
+        val seasonMissing = season.isBlank()
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("টুর্নামেন্টের নাম") },
+            isError = attemptedSubmit && nameMissing,
+            supportingText = { if (attemptedSubmit && nameMissing) Text("টুর্নামেন্টের নাম লিখতে হবে") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(value = clubName, onValueChange = { clubName = it }, label = { Text("ক্লাব / সংগঠনের নাম") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = clubName,
+            onValueChange = { clubName = it },
+            label = { Text("ক্লাব / সংগঠনের নাম") },
+            isError = attemptedSubmit && clubNameMissing,
+            supportingText = { if (attemptedSubmit && clubNameMissing) Text("ক্লাব বা সংগঠনের নাম লিখতে হবে") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(value = city, onValueChange = { city = it }, label = { Text("শহর") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = city,
+            onValueChange = { city = it },
+            label = { Text("শহর") },
+            isError = attemptedSubmit && cityMissing,
+            supportingText = { if (attemptedSubmit && cityMissing) Text("শহরের নাম লিখতে হবে") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = season,
@@ -197,6 +225,8 @@ private fun TournamentSetupForm(
             readOnly = true,
             label = { Text("সিজন / বছর") },
             placeholder = { Text("বেছে নাও") },
+            isError = attemptedSubmit && seasonMissing,
+            supportingText = { if (attemptedSubmit && seasonMissing) Text("একটা সিজন/বছর বেছে নাও") },
             modifier = Modifier.fillMaxWidth().clickable { showSeasonPicker = true }
         )
         Spacer(Modifier.height(8.dp))
@@ -218,7 +248,15 @@ private fun TournamentSetupForm(
             )
         }
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(value = oversText, onValueChange = { oversText = it }, label = { Text("প্রতি ম্যাচে কত ওভার") }, modifier = Modifier.fillMaxWidth())
+        val oversInvalid = (oversText.toIntOrNull() ?: 0) <= 0
+        OutlinedTextField(
+            value = oversText,
+            onValueChange = { oversText = it },
+            label = { Text("প্রতি ম্যাচে কত ওভার") },
+            isError = attemptedSubmit && oversInvalid,
+            supportingText = { if (attemptedSubmit && oversInvalid) Text("০ এর বেশি একটা ওভার সংখ্যা লিখো") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(value = venue, onValueChange = { venue = it }, label = { Text("ভেন্যু (ঐচ্ছিক)") }, modifier = Modifier.fillMaxWidth())
 
@@ -237,13 +275,26 @@ private fun TournamentSetupForm(
 
         Spacer(Modifier.height(20.dp))
         val overs = oversText.toIntOrNull() ?: 0
+        val isValid = !nameMissing && !clubNameMissing && !cityMissing && !seasonMissing && overs > 0
+        if (attemptedSubmit && !isValid) {
+            Text(
+                text = "উপরে লাল করে দেখানো জায়গাগুলো ঠিক করো, তারপর আবার চেষ্টা করো।",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        // Always tappable — tapping while something's missing just lights up the red messages
+        // above instead of silently doing nothing.
         Button(
-            enabled = name.isNotBlank() && clubName.isNotBlank() && city.isNotBlank() && season.isNotBlank() && overs > 0,
             onClick = {
-                onCreate(
-                    name, overs, venue.ifBlank { null }, clubName.ifBlank { null }, city.ifBlank { null },
-                    season.ifBlank { null }, startDateMillis, endDateMillis, ballType
-                )
+                attemptedSubmit = true
+                if (isValid) {
+                    onCreate(
+                        name, overs, venue.ifBlank { null }, clubName.ifBlank { null }, city.ifBlank { null },
+                        season.ifBlank { null }, startDateMillis, endDateMillis, ballType
+                    )
+                }
             },
             modifier = Modifier.fillMaxWidth()
         ) { Text("টুর্নামেন্ট তৈরি করো") }
