@@ -157,12 +157,17 @@ fun TournamentFixtureFlow(
                 bowlingPlayerNames = bowlingNameMap,
                 onRuns = matchViewModel::recordRuns,
                 onExtra = matchViewModel::recordExtra,
-                onWicket = { type, dismissedId, _, fielderId ->
-                    val nextBatsman = battingNames.firstOrNull { name ->
-                        live?.state?.batsmanFigures?.get(name)?.isOut != true && name != live?.state?.strikerId && name != live?.state?.nonStrikerId
+                onWicket = { type, dismissedId, explicitIncomingId, fielderId, selectedBowlerId ->
+                    // See the matching comment in MatchFlow.kt for why explicitIncomingId is
+                    // checked first, and isRetiredHurt is excluded from the auto-pick fallback.
+                    val nextBatsman = explicitIncomingId ?: battingNames.firstOrNull { name ->
+                        val fig = live?.state?.batsmanFigures?.get(name)
+                        fig?.isOut != true && fig?.isRetiredHurt != true &&
+                            name != live?.state?.strikerId && name != live?.state?.nonStrikerId
                     }
-                    matchViewModel.recordWicket(type, dismissedId, nextBatsman, fielderId = fielderId)
+                    matchViewModel.recordWicket(type, dismissedId, nextBatsman, selectedBowlerId = selectedBowlerId, fielderId = fielderId)
                 },
+                onRetiredHurt = matchViewModel::recordRetiredHurt,
                 onUndo = matchViewModel::undoLastBall,
                 onInningsComplete = {
                     val finished = live ?: return@ScoringScreen
@@ -204,7 +209,12 @@ fun TournamentFixtureFlow(
 
         is FixtureFlowStep.Summary -> {
             var innings by remember { mutableStateOf<List<InningsSummary>?>(null) }
-            LaunchedEffect(s.matchId) { innings = app.matchRepository.getFinalInningsStates(s.matchId) }
+            LaunchedEffect(s.matchId) {
+                // Same fix as MatchFlow.kt's Summary step — without this, a finished tournament
+                // fixture also kept showing "LIVE" forever with no saved win/loss result.
+                app.matchRepository.finalizeCompletedMatch(s.matchId)
+                innings = app.matchRepository.getFinalInningsStates(s.matchId)
+            }
             innings?.let { MatchSummaryScreen(innings = it, onDone = onDone) }
                 ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         }

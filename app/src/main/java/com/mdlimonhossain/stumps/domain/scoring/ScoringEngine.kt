@@ -73,7 +73,13 @@ data class BatsmanFigures(
     val isOut: Boolean = false,
     val dismissalType: DismissalType? = null,
     val ballsAtFifty: Int? = null,
-    val ballsAtHundred: Int? = null
+    val ballsAtHundred: Int? = null,
+    // True while this batsman has retired hurt and hasn't come back in yet — NOT the same as
+    // isOut (retiring isn't a dismissal, so it never counts towards the team's fall of wickets,
+    // and the real cricket rule lets them return later to resume their innings). This flips
+    // back to false automatically the moment they're sent back in as someone's replacement —
+    // see ScoringEngine's handling of BallRecord.newBatsmanId for exactly where that happens.
+    val isRetiredHurt: Boolean = false
 )
 
 /**
@@ -189,10 +195,12 @@ object ScoringEngine {
         var bowler = openingBowlerId
         var previousOverBowler: String? = null
         var overJustCompleted = false
-        // Remembers whether the VERY LAST ball processed was a wicket — used after the loop to
-        // avoid appending a bogus, empty "phantom" partnership when the innings happened to end
-        // right on a wicket ball (that partnership was already closed off inside the loop).
-        var lastBallWasWicket = false
+        // Remembers whether the VERY LAST ball processed closed off a partnership (either a
+        // real wicket, OR a batsman retiring hurt — both change who's at the crease) — used
+        // after the loop to avoid appending a bogus, empty "phantom" partnership when the
+        // innings happened to end right on one of those balls (that partnership was already
+        // closed off inside the loop).
+        var lastBallSplitPartnership = false
 
         // Maps that collect stats per-player as we go. Key = player id, Value = their figures so far.
         val batsmen = mutableMapOf<String, BatsmanFigures>()
@@ -220,15 +228,21 @@ object ScoringEngine {
         // even if the list we were given wasn't already in order.
         for (ball in balls.sortedBy { it.sequence }) {
             overJustCompleted = false
-            lastBallWasWicket = ball.isWicket
+            // A "retirement" ball is a special marker (see BallRecord.dismissalType's own
+            // comment) — a batsman leaving hurt isn't a real delivery bowled, so it must NOT
+            // count towards the over, NOT add a "ball faced" to the batsman, and NOT touch the
+            // bowler's figures at all. It only changes who's standing at the crease.
+            val isRetirement = !ball.isWicket && ball.dismissalType == DismissalType.RETIRED_HURT
+            lastBallSplitPartnership = ball.isWicket || isRetirement
             totalRuns += ball.runsThisBall
             // Add this ball's runs into whichever over-bucket is currently open (the last one in the list).
             runsPerOver[runsPerOver.lastIndex] = runsPerOver.last() + ball.runsThisBall
             // The current partnership grows by every run the TEAM scores (including extras — same
             // as a real scorecard) and every legal ball bowled, for as long as this exact pair
-            // stays unbroken.
+            // stays unbroken. (runsThisBall is always 0 for a retirement marker, so the += here
+            // is harmless even though we don't specifically guard it.)
             partnershipRuns += ball.runsThisBall
-            if (ball.isLegalDelivery) partnershipBalls += 1
+            if (ball.isLegalDelivery && !isRetirement) partnershipBalls += 1
 
             // If the scorer recorded WHERE the shot went (only done for some balls), remember it
             // for the wagon wheel chart. We skip wides here because you can't really "place" a wide.
@@ -236,99 +250,129 @@ object ScoringEngine {
                 shotEvents.add(ShotEvent(ball.strikerId, ball.shotAngleDegrees, ball.runsOffBat, ball.runsOffBat == 6))
             }
 
-            // ---- Work out the bowler's figures for this ball ----
-            val bowlerStats = bowlers.getOrDefault(ball.bowlerId, BowlerFigures())
-            // In real cricket scoring, a bowler is charged for the batsman's runs PLUS any wide/no-ball
-            // penalty runs, but NOT for byes or leg-byes (those aren't the bowler's fault).
-            val chargedToBowler = ball.runsOffBat + if (ball.extraType == ExtraType.WIDE || ball.extraType == ExtraType.NO_BALL) ball.extraRuns else 0
-
-            // ---- Work out the batsman's figures for this ball ----
             val batsAtCreaseId = ball.strikerId
-            val battingStats = batsmen.getOrDefault(batsAtCreaseId, BatsmanFigures())
-            // A batsman doesn't "face" a wide (it's not really their ball to play), so we don't
-            // count it towards their ballsFaced total. Everything else counts.
-            val countsAsFaced = ball.extraType != ExtraType.WIDE
 
-            // The batsman only gets personal credit for runs on a normal ball or a no-ball
-            // (byes/leg-byes go to the team total but not to the batsman's own score).
-            val batRunsThisBall = if (ball.extraType == null || ball.extraType == ExtraType.NO_BALL) ball.runsOffBat else 0
-            val newBatRuns = battingStats.runs + batRunsThisBall
-            val newBallsFaced = battingStats.ballsFaced + if (countsAsFaced) 1 else 0
-            batsmen[batsAtCreaseId] = battingStats.copy(
-                runs = newBatRuns,
-                ballsFaced = newBallsFaced,
-                fours = battingStats.fours + if ((ball.extraType == null || ball.extraType == ExtraType.NO_BALL) && ball.runsOffBat == 4) 1 else 0,
-                sixes = battingStats.sixes + if ((ball.extraType == null || ball.extraType == ExtraType.NO_BALL) && ball.runsOffBat == 6) 1 else 0,
-                // A milestone is only ever recorded the FIRST time the total crosses the line —
-                // once ballsAtFifty/ballsAtHundred is set, it's never overwritten.
-                ballsAtFifty = battingStats.ballsAtFifty ?: (if (newBatRuns >= 50) newBallsFaced else null),
-                ballsAtHundred = battingStats.ballsAtHundred ?: (if (newBatRuns >= 100) newBallsFaced else null)
-            )
+            // A retirement marker skips ALL of the normal "a ball was actually bowled" bookkeeping
+            // below (bowler figures, batsman runs/balls-faced, wicket tally) — the only thing it
+            // does is recorded further down: swap the retiring batsman out for their replacement.
+            if (!isRetirement) {
+                // ---- Work out the bowler's figures for this ball ----
+                val bowlerStats = bowlers.getOrDefault(ball.bowlerId, BowlerFigures())
+                // In real cricket scoring, a bowler is charged for the batsman's runs PLUS any wide/no-ball
+                // penalty runs, but NOT for byes or leg-byes (those aren't the bowler's fault).
+                val chargedToBowler = ball.runsOffBat + if (ball.extraType == ExtraType.WIDE || ball.extraType == ExtraType.NO_BALL) ball.extraRuns else 0
 
-            var updatedBowlerStats = bowlerStats.copy(
-                runsConceded = bowlerStats.runsConceded + chargedToBowler,
-                legalBalls = bowlerStats.legalBalls + if (ball.isLegalDelivery) 1 else 0
-            )
+                // ---- Work out the batsman's figures for this ball ----
+                val battingStats = batsmen.getOrDefault(batsAtCreaseId, BatsmanFigures())
+                // A batsman doesn't "face" a wide (it's not really their ball to play), so we don't
+                // count it towards their ballsFaced total. Everything else counts.
+                val countsAsFaced = ball.extraType != ExtraType.WIDE
 
-            // ---- If someone got out on this ball ----
-            if (ball.isWicket) {
-                totalWickets += 1
-                // Usually the striker is the one who got out, but on a run-out it could be the
-                // non-striker instead — dismissedPlayerId tells us exactly who, if it was set.
-                val dismissedId = ball.dismissedPlayerId ?: batsAtCreaseId
-                val dismissedStats = batsmen.getOrDefault(dismissedId, BatsmanFigures())
-                batsmen[dismissedId] = dismissedStats.copy(isOut = true, dismissalType = ball.dismissalType)
+                // The batsman only gets personal credit for runs on a normal ball or a no-ball
+                // (byes/leg-byes go to the team total but not to the batsman's own score).
+                val batRunsThisBall = if (ball.extraType == null || ball.extraType == ExtraType.NO_BALL) ball.runsOffBat else 0
+                val newBatRuns = battingStats.runs + batRunsThisBall
+                val newBallsFaced = battingStats.ballsFaced + if (countsAsFaced) 1 else 0
+                batsmen[batsAtCreaseId] = battingStats.copy(
+                    runs = newBatRuns,
+                    ballsFaced = newBallsFaced,
+                    fours = battingStats.fours + if ((ball.extraType == null || ball.extraType == ExtraType.NO_BALL) && ball.runsOffBat == 4) 1 else 0,
+                    sixes = battingStats.sixes + if ((ball.extraType == null || ball.extraType == ExtraType.NO_BALL) && ball.runsOffBat == 6) 1 else 0,
+                    // A milestone is only ever recorded the FIRST time the total crosses the line —
+                    // once ballsAtFifty/ballsAtHundred is set, it's never overwritten.
+                    ballsAtFifty = battingStats.ballsAtFifty ?: (if (newBatRuns >= 50) newBallsFaced else null),
+                    ballsAtHundred = battingStats.ballsAtHundred ?: (if (newBatRuns >= 100) newBallsFaced else null)
+                )
 
-                // This wicket breaks the current partnership — close it off, then start a fresh
-                // one for whoever's left + the new batsman coming in (if the innings isn't over).
+                var updatedBowlerStats = bowlerStats.copy(
+                    runsConceded = bowlerStats.runsConceded + chargedToBowler,
+                    legalBalls = bowlerStats.legalBalls + if (ball.isLegalDelivery) 1 else 0
+                )
+
+                // ---- If someone got out on this ball ----
+                if (ball.isWicket) {
+                    totalWickets += 1
+                    // Usually the striker is the one who got out, but on a run-out it could be the
+                    // non-striker instead — dismissedPlayerId tells us exactly who, if it was set.
+                    val dismissedId = ball.dismissedPlayerId ?: batsAtCreaseId
+                    val dismissedStats = batsmen.getOrDefault(dismissedId, BatsmanFigures())
+                    batsmen[dismissedId] = dismissedStats.copy(isOut = true, dismissalType = ball.dismissalType)
+
+                    // This wicket breaks the current partnership — close it off, then start a fresh
+                    // one for whoever's left + the new batsman coming in (if the innings isn't over).
+                    partnerships.add(PartnershipRecord(partnerA, partnerB, partnershipRuns, partnershipBalls, wicketNumberForPartnership))
+                    if (ball.newBatsmanId != null) {
+                        if (dismissedId == partnerA) partnerA = ball.newBatsmanId else partnerB = ball.newBatsmanId
+                    }
+                    partnershipRuns = 0
+                    partnershipBalls = 0
+                    wicketNumberForPartnership += 1
+                    // A bowler only gets "credit" for a wicket if it wasn't a run out — a run out is
+                    // usually the fielders' doing, not really the bowler's achievement.
+                    if (ball.dismissalType != DismissalType.RUN_OUT) {
+                        updatedBowlerStats = updatedBowlerStats.copy(wickets = updatedBowlerStats.wickets + 1)
+                    }
+                    // Give the credited fielder a tally mark, if the scorer recorded one — only ever
+                    // set for CAUGHT/STUMPED/RUN_OUT (see BallRecord.fielderId's own comment).
+                    if (ball.fielderId != null) {
+                        val fielderStats = fielders.getOrDefault(ball.fielderId, FieldingFigures())
+                        fielders[ball.fielderId] = when (ball.dismissalType) {
+                            DismissalType.CAUGHT -> fielderStats.copy(catches = fielderStats.catches + 1)
+                            DismissalType.STUMPED -> fielderStats.copy(stumpings = fielderStats.stumpings + 1)
+                            DismissalType.RUN_OUT -> fielderStats.copy(runOuts = fielderStats.runOuts + 1)
+                            else -> fielderStats // shouldn't happen — fielderId is only ever set for the three types above
+                        }
+                    }
+                }
+                bowlers[ball.bowlerId] = updatedBowlerStats
+            }
+
+            // ---- A batsman retiring hurt (see the top of this loop iteration) ----
+            // Not a dismissal (no wicket added), but it DOES change who's at the crease and
+            // splits the partnership just like a wicket would — we just don't advance the
+            // partnership's wicket-number label, since retiring isn't a fall of wicket.
+            if (isRetirement) {
+                val retiredId = ball.dismissedPlayerId ?: batsAtCreaseId
+                val retiredStats = batsmen.getOrDefault(retiredId, BatsmanFigures())
+                batsmen[retiredId] = retiredStats.copy(isRetiredHurt = true)
                 partnerships.add(PartnershipRecord(partnerA, partnerB, partnershipRuns, partnershipBalls, wicketNumberForPartnership))
                 if (ball.newBatsmanId != null) {
-                    if (dismissedId == partnerA) partnerA = ball.newBatsmanId else partnerB = ball.newBatsmanId
+                    if (retiredId == partnerA) partnerA = ball.newBatsmanId else partnerB = ball.newBatsmanId
                 }
                 partnershipRuns = 0
                 partnershipBalls = 0
-                wicketNumberForPartnership += 1
-                // A bowler only gets "credit" for a wicket if it wasn't a run out — a run out is
-                // usually the fielders' doing, not really the bowler's achievement.
-                if (ball.dismissalType != DismissalType.RUN_OUT) {
-                    updatedBowlerStats = updatedBowlerStats.copy(wickets = updatedBowlerStats.wickets + 1)
-                }
-                // Give the credited fielder a tally mark, if the scorer recorded one — only ever
-                // set for CAUGHT/STUMPED/RUN_OUT (see BallRecord.fielderId's own comment).
-                if (ball.fielderId != null) {
-                    val fielderStats = fielders.getOrDefault(ball.fielderId, FieldingFigures())
-                    fielders[ball.fielderId] = when (ball.dismissalType) {
-                        DismissalType.CAUGHT -> fielderStats.copy(catches = fielderStats.catches + 1)
-                        DismissalType.STUMPED -> fielderStats.copy(stumpings = fielderStats.stumpings + 1)
-                        DismissalType.RUN_OUT -> fielderStats.copy(runOuts = fielderStats.runOuts + 1)
-                        else -> fielderStats // shouldn't happen — fielderId is only ever set for the three types above
-                    }
-                }
             }
-            bowlers[ball.bowlerId] = updatedBowlerStats
 
             // ---- Work out who's on strike for the NEXT ball ----
             // In cricket, if the batsmen run an ODD number of runs (1, 3, 5...), they end up
             // swapping ends, so the striker and non-striker switch places. An even number of
-            // runs (0, 2, 4, 6) means they stay where they are.
+            // runs (0, 2, 4, 6) means they stay where they are. (Always 0 runs run on a
+            // retirement marker, so this never fires for one.)
             if (ball.runsRun % 2 == 1) {
                 val tmp = striker
                 striker = nonStriker
                 nonStriker = tmp
             }
 
-            // If a wicket fell and a new batsman is coming in, put them in the correct spot
-            // (replacing whoever got out, whether that was the striker or non-striker).
-            if (ball.isWicket && ball.newBatsmanId != null) {
+            // If a wicket fell OR a batsman retired, and someone is coming in to replace them,
+            // put that person in the correct spot (whichever end the outgoing batsman was at).
+            // newBatsmanId is only ever set for these two cases — never for an ordinary ball —
+            // so checking it alone (instead of also checking ball.isWicket) covers both.
+            if (ball.newBatsmanId != null) {
                 if ((ball.dismissedPlayerId ?: batsAtCreaseId) == striker) striker = ball.newBatsmanId
                 else nonStriker = ball.newBatsmanId
+                // Whoever's coming in — a brand new batsman, or someone who had earlier retired
+                // hurt and is now well enough to resume — is clearly not "sitting out" any more.
+                val incomingStats = batsmen.getOrDefault(ball.newBatsmanId, BatsmanFigures())
+                batsmen[ball.newBatsmanId] = incomingStats.copy(isRetiredHurt = false)
             }
 
             bowler = ball.bowlerId
 
             // ---- Handle the end of an over ----
-            // Only LEGAL deliveries count towards the 6-ball over (wides/no-balls don't).
-            if (ball.isLegalDelivery) {
+            // Only LEGAL deliveries count towards the 6-ball over (wides/no-balls don't, and
+            // neither does a retirement marker — nobody actually bowled a ball for that).
+            if (ball.isLegalDelivery && !isRetirement) {
                 legalBalls += 1
                 ballsInCurrentOver += 1
                 if (ballsInCurrentOver == 6) {
@@ -363,15 +407,18 @@ object ScoringEngine {
         }
 
         // The innings is over if either: the batting team has run out of players (all out),
-        // or they've used up every ball they're allowed to face.
+        // or they've used up every ball they're allowed to face. Note: this doesn't account for
+        // the rare real-cricket edge case where a retired-hurt batsman never returns AND there's
+        // nobody left to send in as a fresh batsman either — that would need knowing the whole
+        // squad list here (not just its size), so it's left as a known limitation for now.
         val isComplete = totalWickets >= (squadSize - 1) || legalBalls >= oversLimit * 6
 
-        // The LAST partnership never got closed off by a wicket (either it's still unbroken, or
-        // the innings ended because overs ran out) — add it now so it's not lost. Skipped when
-        // no ball has been bowled yet (nothing to show), or when the very last ball WAS a wicket
-        // (that partnership was already closed off and appended inside the loop above — adding
-        // it again here would just create a bogus empty "0 runs" duplicate).
-        if (balls.isNotEmpty() && !lastBallWasWicket) {
+        // The LAST partnership never got closed off (either it's still unbroken, or the innings
+        // ended because overs ran out) — add it now so it's not lost. Skipped when no ball has
+        // been bowled yet (nothing to show), or when the very last ball already closed it off
+        // itself (a wicket or a retirement — see lastBallSplitPartnership above; adding it again
+        // here would just create a bogus empty "0 runs" duplicate).
+        if (balls.isNotEmpty() && !lastBallSplitPartnership) {
             partnerships.add(PartnershipRecord(partnerA, partnerB, partnershipRuns, partnershipBalls, wicketNumberForPartnership))
         }
 

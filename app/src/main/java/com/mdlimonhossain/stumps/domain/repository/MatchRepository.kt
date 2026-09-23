@@ -52,6 +52,35 @@ data class InningsSummary(
 )
 
 /**
+ * Works out the plain-Bangla "who won and by how much" line for a match, from its finished
+ * innings' final scores — the same cricket rule used everywhere else in this file (teamRecord,
+ * headToHead): whoever scored more runs won. Returns null if the match hasn't finished both
+ * innings yet, so there's nothing to announce.
+ *
+ * The team that batted SECOND (chasing a target) wins "by N wickets" — N is how many wickets
+ * they had LEFT when they passed the target, i.e. 10 minus how many fell (10, not 11, because a
+ * team is "all out" at its 10th wicket, the 11th player has nobody left to bat with). The team
+ * that batted FIRST wins "by N runs" — the gap between the two scores, since the chasing team
+ * simply fell short.
+ */
+fun matchResultText(innings: List<InningsSummary>): String? {
+    if (innings.size < 2) return null // an unfinished match has no result yet
+    val first = innings.firstOrNull { it.innings.inningsNumber == 1 } ?: return null
+    val second = innings.firstOrNull { it.innings.inningsNumber == 2 } ?: return null
+    return when {
+        second.state.totalRuns > first.state.totalRuns -> {
+            val wicketsRemaining = 10 - second.state.totalWickets
+            "${second.battingTeamName} $wicketsRemaining উইকেটে জয়ী"
+        }
+        first.state.totalRuns > second.state.totalRuns -> {
+            val runMargin = first.state.totalRuns - second.state.totalRuns
+            "${first.battingTeamName} $runMargin রানে জয়ী"
+        }
+        else -> "ম্যাচ টাই হয়েছে"
+    }
+}
+
+/**
  * MatchRepository ties together 5 different database tables (teams, players, matches, innings,
  * balls — each one is a "Dao", short for Data Access Object, which is just a class Room gives us
  * for reading/writing one table) and exposes simple, easy-to-use functions for the rest of the
@@ -315,6 +344,28 @@ class MatchRepository(
     }
 
     suspend fun getMatchOnce(matchId: String): MatchEntity? = matchDao.getById(matchId)
+
+    /**
+     * Called once a match's SECOND innings has actually finished (see MatchFlow.kt's Summary
+     * step) — this is the one place that decides who won and saves it permanently, instead of
+     * every screen (Home, History, Match Centre) re-guessing it on the fly.
+     *
+     * Before this existed, MatchEntity.status was written as "LIVE" once when the match was
+     * created and NEVER updated again — so every finished match kept showing "LIVE" forever on
+     * every screen that displays it. This fixes that by writing "COMPLETED" plus a short result
+     * line (e.g. "Dhaka Tigers ৪৫ রানে জয়ী") onto the match row.
+     *
+     * Returns the result text, or null if the match doesn't actually have both innings finished
+     * yet (shouldn't normally happen when called from the Summary step, but this guards against
+     * calling it too early by mistake).
+     */
+    suspend fun finalizeCompletedMatch(matchId: String): String? {
+        val match = matchDao.getById(matchId) ?: return null
+        val innings = getFinalInningsStates(matchId)
+        val resultText = matchResultText(innings) ?: return null
+        matchDao.upsert(match.copy(status = "COMPLETED", resultText = resultText))
+        return resultText
+    }
 
     /**
      * Looks back through every OTHER match this user has recorded between these exact two team

@@ -114,9 +114,14 @@ private fun CloudScorecardTab(summary: PublicInningsWithBalls) {
         Spacer(Modifier.height(16.dp))
         Text(text = "ব্যাটিং", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
         s.batsmanFigures.forEach { (name, fig) ->
+            val status = when {
+                fig.isOut -> fig.dismissalType?.name ?: "out"
+                fig.isRetiredHurt -> "retired hurt"
+                else -> "not out"
+            }
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(text = name, modifier = Modifier.weight(1f))
-                Text(text = "${fig.runs} (${fig.ballsFaced}) ${if (fig.isOut) fig.dismissalType?.name ?: "out" else "not out"}", fontSize = 12.sp)
+                Text(text = "${fig.runs} (${fig.ballsFaced}) $status", fontSize = 12.sp)
             }
         }
         Spacer(Modifier.height(20.dp))

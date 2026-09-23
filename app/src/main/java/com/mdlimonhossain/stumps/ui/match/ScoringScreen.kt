@@ -56,9 +56,13 @@ fun ScoringScreen(
     live: LiveInnings?, // the current live scoreboard — null while it's still loading
     battingPlayerNames: Map<String, String>,
     bowlingPlayerNames: Map<String, String>,
-    onRuns: (runs: Int, shotAngleDegrees: Int?) -> Unit,
-    onExtra: (ExtraType, extraRuns: Int, runsRun: Int) -> Unit,
-    onWicket: (DismissalType, dismissedPlayerId: String, newBatsmanId: String?, fielderId: String?) -> Unit,
+    onRuns: (runs: Int, shotAngleDegrees: Int?, selectedBowlerId: String?) -> Unit,
+    onExtra: (ExtraType, extraRuns: Int, runsRun: Int, selectedBowlerId: String?) -> Unit,
+    onWicket: (DismissalType, dismissedPlayerId: String, newBatsmanId: String?, fielderId: String?, selectedBowlerId: String?) -> Unit,
+    // Called when a batsman retires hurt (feeling unwell/injured) and a replacement takes their
+    // place. Not a wicket — the retired batsman can be recalled later (see the WicketDialog's
+    // "কে ব্যাটিংয়ে আসছে?" step) instead of being permanently out.
+    onRetiredHurt: (retiredPlayerId: String, replacementBatsmanId: String) -> Unit = { _, _ -> },
     onUndo: () -> Unit,
     onInningsComplete: () -> Unit,
     onGoLive: () -> Unit = {},
@@ -80,6 +84,16 @@ fun ScoringScreen(
     // Set only briefly, right after tapping 4 or 6, while we wait for the scorer to pick a
     // shot direction (or skip) in the ShotDirectionDialog — null means no dialog is showing.
     var pendingBoundaryRuns by remember { mutableStateOf<Int?>(null) }
+    // Whether the "বোলার বদলাও" (change bowler) popup is open — this is the ANYTIME picker
+    // (e.g. the current bowler gets injured mid-over), separate from the automatic mandatory
+    // pick that shows up right after an over finishes.
+    var showBowlerChangeDialog by remember { mutableStateOf(false) }
+    // The bowler the scorer just picked (from either dialog above), waiting to be attached to
+    // the VERY NEXT ball recorded. Once that ball is sent, this is cleared back to null — from
+    // then on the new bowler is simply whoever the scoreboard already says is bowling.
+    var manualBowlerOverride by remember { mutableStateOf<String?>(null) }
+    // Whether the "অসুস্থ (Retired Hurt)" popup is open.
+    var showRetiredHurtDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
         TextButton(onClick = { showExitConfirm = true }) { Text("← বের হও") }
@@ -119,6 +133,16 @@ fun ScoringScreen(
                 text = "বোলার: ${bowlingPlayerNames[s.currentBowlerId] ?: "?"}  ${bowlerFigures?.overs ?: "0.0"}-${bowlerFigures?.runsConceded ?: 0}-${bowlerFigures?.wickets ?: 0}",
                 style = MaterialTheme.typography.bodyMedium
             )
+            // If a new bowler has been picked but hasn't actually bowled a ball yet (still
+            // waiting for the scorer to tap a run/extra/wicket button), show it here so it's
+            // clear the change is queued up and about to take effect.
+            manualBowlerOverride?.let { pickedId ->
+                Text(
+                    text = "পরের বল থেকে বোলার: ${bowlingPlayerNames[pickedId] ?: pickedId}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
         }
 
         Spacer(Modifier.height(20.dp))
@@ -135,8 +159,17 @@ fun ScoringScreen(
                 Button(
                     // For a 4 or 6, don't record the ball straight away — first ask WHERE it
                     // went, via the shot-direction popup, for the wagon wheel chart. For every
-                    // other run value, just record it immediately (no direction needed).
-                    onClick = { if (isBoundary) pendingBoundaryRuns = r else onRuns(r, null) },
+                    // other run value, just record it immediately (no direction needed). Either
+                    // way, if a bowler change was queued up (manualBowlerOverride), attach it to
+                    // this ball and clear it so it doesn't get applied AGAIN on the next ball.
+                    onClick = {
+                        if (isBoundary) {
+                            pendingBoundaryRuns = r
+                        } else {
+                            onRuns(r, null, manualBowlerOverride)
+                            manualBowlerOverride = null
+                        }
+                    },
                     modifier = Modifier.weight(1f).height(52.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
                     shape = MaterialTheme.shapes.medium,
@@ -160,6 +193,14 @@ fun ScoringScreen(
             OutlinedButton(onClick = { showWicketDialog = true }) { Text("Wicket") }
             OutlinedButton(onClick = onUndo) { Text("Undo") }
         }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // The ANYTIME bowler-change button — for when the current bowler needs to be
+            // swapped mid-over (e.g. an injury), not just at the normal end-of-over point.
+            OutlinedButton(onClick = { showBowlerChangeDialog = true }) { Text("বোলার বদলাও") }
+            // A batsman feeling unwell/injured — NOT the same as being out. See RetiredHurtDialog.
+            OutlinedButton(onClick = { showRetiredHurtDialog = true }) { Text("অসুস্থ (Retired Hurt)") }
+        }
 
         // Show the "finish this innings" button either when the innings genuinely ended
         // (all out / overs used up) OR when the chasing team has already reached their target
@@ -176,19 +217,23 @@ fun ScoringScreen(
         ScoringGuideSection()
     }
 
-    // Each of these three popups only actually appears on screen when its "show..." state is
+    // Each of these popups only actually appears on screen when its "show..." state is
     // true/non-null — otherwise nothing is drawn for them at all.
     pendingBoundaryRuns?.let { runs ->
         ShotDirectionDialog(
             runs = runs,
-            onPicked = { angle -> onRuns(runs, angle); pendingBoundaryRuns = null }
+            onPicked = { angle -> onRuns(runs, angle, manualBowlerOverride); manualBowlerOverride = null; pendingBoundaryRuns = null }
         )
     }
 
     if (showExtraDialog) {
         ExtraDialog(
             onDismiss = { showExtraDialog = false },
-            onConfirm = { type, runs -> onExtra(type, runs, if (type == ExtraType.WIDE || type == ExtraType.NO_BALL) 0 else runs); showExtraDialog = false }
+            onConfirm = { type, runs ->
+                onExtra(type, runs, if (type == ExtraType.WIDE || type == ExtraType.NO_BALL) 0 else runs, manualBowlerOverride)
+                manualBowlerOverride = null
+                showExtraDialog = false
+            }
         )
     }
     if (showWicketDialog) {
@@ -198,8 +243,61 @@ fun ScoringScreen(
             nonStrikerId = s.nonStrikerId,
             nonStrikerName = battingPlayerNames[s.nonStrikerId] ?: "?",
             bowlingPlayerNames = bowlingPlayerNames,
+            // Everyone on the batting side currently sitting out "retired hurt" — offered as a
+            // "coming back in" option instead of always just picking a fresh batsman.
+            retiredHurtNames = battingPlayerNames.filterKeys { id -> s.batsmanFigures[id]?.isRetiredHurt == true },
             onDismiss = { showWicketDialog = false },
-            onConfirm = { type, dismissedId, fielderId -> onWicket(type, dismissedId, null, fielderId); showWicketDialog = false }
+            onConfirm = { type, dismissedId, fielderId, incomingBatsmanId ->
+                onWicket(type, dismissedId, incomingBatsmanId, fielderId, manualBowlerOverride)
+                manualBowlerOverride = null
+                showWicketDialog = false
+            }
+        )
+    }
+    if (showRetiredHurtDialog) {
+        RetiredHurtDialog(
+            strikerId = s.strikerId,
+            strikerName = battingPlayerNames[s.strikerId] ?: "?",
+            nonStrikerId = s.nonStrikerId,
+            nonStrikerName = battingPlayerNames[s.nonStrikerId] ?: "?",
+            // Who's actually available to come in as the replacement: anyone on the batting
+            // side who hasn't batted yet or is available, excluding whoever's currently at the
+            // crease, anyone already out, and anyone else already sitting out retired hurt.
+            availableReplacements = battingPlayerNames.filterKeys { id ->
+                id != s.strikerId && id != s.nonStrikerId &&
+                    s.batsmanFigures[id]?.isOut != true && s.batsmanFigures[id]?.isRetiredHurt != true
+            },
+            onDismiss = { showRetiredHurtDialog = false },
+            onConfirm = { retiredId, replacementId ->
+                onRetiredHurt(retiredId, replacementId)
+                showRetiredHurtDialog = false
+            }
+        )
+    }
+
+    // The MANDATORY pick: shows automatically (no cancel option) the instant an over finishes,
+    // since real cricket doesn't allow the same bowler to bowl two overs back to back. It stays
+    // up until the scorer picks someone — as soon as they do, manualBowlerOverride gets attached
+    // to the next ball, which makes s.isOverJustCompleted false again on the following redraw
+    // (since that next ball is the 1st of the NEW over, not the 6th of the old one), so this
+    // dialog then disappears on its own.
+    if (s.isOverJustCompleted && manualBowlerOverride == null) {
+        BowlerSelectDialog(
+            title = "ওভার শেষ — পরের ওভার কে করবে?",
+            bowlingPlayerNames = bowlingPlayerNames,
+            excludeId = s.previousOverBowlerId,
+            dismissible = false,
+            onPicked = { id -> manualBowlerOverride = id }
+        )
+    }
+    if (showBowlerChangeDialog) {
+        BowlerSelectDialog(
+            title = "নতুন বোলার বাছাই করো",
+            bowlingPlayerNames = bowlingPlayerNames,
+            excludeId = s.currentBowlerId,
+            dismissible = true,
+            onPicked = { id -> manualBowlerOverride = id; showBowlerChangeDialog = false },
+            onDismiss = { showBowlerChangeDialog = false }
         )
     }
     if (showExitConfirm) {
@@ -347,8 +445,15 @@ private fun WicketDialog(
     nonStrikerId: String?,
     nonStrikerName: String,
     bowlingPlayerNames: Map<String, String>,
+    // Every currently "retired hurt and not yet returned" batsman on the BATTING side, id ->
+    // name. Empty for the vast majority of wickets (nobody's retired), in which case this
+    // dialog behaves exactly as before — the extra "who's coming in" step only appears when
+    // there's actually someone eligible to be recalled.
+    retiredHurtNames: Map<String, String>,
     onDismiss: () -> Unit,
-    onConfirm: (DismissalType, dismissedId: String, fielderId: String?) -> Unit
+    // incomingBatsmanId: null means "just send in the next fresh batsman as usual" — non-null
+    // means the scorer specifically chose to bring back one of retiredHurtNames.
+    onConfirm: (DismissalType, dismissedId: String, fielderId: String?, incomingBatsmanId: String?) -> Unit
 ) {
     // Defaults to "the striker got out" since that's true for most dismissals — the scorer can
     // switch to the non-striker for the (rarer) case of a run out at the other end.
@@ -356,13 +461,44 @@ private fun WicketDialog(
     // null = still on the "who/how" step. Once set to a fielder-crediting type, the dialog
     // switches to its "who fielded it" step instead.
     var pendingFielderType by remember { mutableStateOf<DismissalType?>(null) }
+    // Set once type (+ fielder, if needed) is decided AND there's at least one retired-hurt
+    // batsman available to recall — the dialog then shows one more step asking who's coming in,
+    // instead of confirming immediately. Holds everything onConfirm needs once that's answered.
+    var awaitingIncoming by remember { mutableStateOf<Pair<DismissalType, String?>?>(null) }
+
+    // Shared by both "who/how" and "who fielded it" steps below: once the dismissal type (and
+    // fielder, if any) is settled, either ask who's batting in next (if anyone's eligible to
+    // return from retired hurt) or just confirm immediately like before.
+    fun proceedAfterTypeChosen(type: DismissalType, fielderId: String?) {
+        if (retiredHurtNames.isEmpty()) {
+            dismissed?.let { onConfirm(type, it, fielderId, null) }
+        } else {
+            awaitingIncoming = type to fielderId
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("উইকেট") },
         text = {
+            val incoming = awaitingIncoming
             val fielderType = pendingFielderType
-            if (fielderType == null) {
+            if (incoming != null) {
+                Column {
+                    Text("কে ব্যাটিংয়ে আসছে?")
+                    // The retired-hurt option(s) come first since recalling them is the whole
+                    // point of this extra step — "নতুন ব্যাটসম্যান" is for the ordinary case
+                    // where the scorer just wants the next fresh player as usual.
+                    retiredHurtNames.forEach { (id, name) ->
+                        TextButton(onClick = {
+                            dismissed?.let { onConfirm(incoming.first, it, incoming.second, id) }
+                        }) { Text("$name (ফিরছে)") }
+                    }
+                    TextButton(onClick = {
+                        dismissed?.let { onConfirm(incoming.first, it, incoming.second, null) }
+                    }) { Text("নতুন ব্যাটসম্যান") }
+                }
+            } else if (fielderType == null) {
                 Column {
                     Text("কে আউট হলো?")
                     Row {
@@ -371,13 +507,16 @@ private fun WicketDialog(
                     }
                     Spacer(Modifier.height(8.dp))
                     Text("কিভাবে আউট?")
-                    DismissalType.entries.forEach { type ->
+                    // RETIRED_HURT is deliberately left out here — retiring isn't a real
+                    // dismissal, so it has its own separate "অসুস্থ (Retired Hurt)" button on
+                    // the scoring screen instead of going through this wicket flow at all.
+                    DismissalType.entries.filter { it != DismissalType.RETIRED_HURT }.forEach { type ->
                         TextButton(onClick = {
                             if (type == DismissalType.CAUGHT || type == DismissalType.STUMPED || type == DismissalType.RUN_OUT) {
                                 pendingFielderType = type
                             } else {
-                                // No fielder to ask about — confirm the whole wicket right away.
-                                dismissed?.let { onConfirm(type, it, null) }
+                                // No fielder to ask about — move straight to the next step.
+                                proceedAfterTypeChosen(type, null)
                             }
                         }) { Text(type.name) }
                     }
@@ -389,7 +528,7 @@ private fun WicketDialog(
                     // simplified player-identity model (see the note in MatchFlow.kt) — so any
                     // one of them works equally well as both the fielder's id and display name.
                     bowlingPlayerNames.keys.forEach { name ->
-                        TextButton(onClick = { dismissed?.let { onConfirm(fielderType, it, name) } }) { Text(name) }
+                        TextButton(onClick = { proceedAfterTypeChosen(fielderType, name) }) { Text(name) }
                     }
                     Spacer(Modifier.height(8.dp))
                     TextButton(onClick = { pendingFielderType = null }) { Text("← ফিরে যাও") }
@@ -406,4 +545,94 @@ private fun fielderPromptText(type: DismissalType): String = when (type) {
     DismissalType.STUMPED -> "কোন উইকেট-কিপার স্টাম্প করলো?"
     DismissalType.RUN_OUT -> "কে রান আউট করলো?"
     else -> "কে করলো?" // unreachable — this dialog step only ever shows for the three types above
+}
+
+/**
+ * The popup for recording a batsman retiring hurt (feeling unwell or injured mid-innings) and
+ * picking their replacement. Unlike WicketDialog, there's no "how did they get out" step at
+ * all — retiring isn't a dismissal, it's just a pause; the real cricket rule is that this
+ * batsman can be recalled later (see WicketDialog's "কে ব্যাটিংয়ে আসছে?" step) to resume their
+ * innings from wherever they left off.
+ */
+@Composable
+private fun RetiredHurtDialog(
+    strikerId: String?,
+    strikerName: String,
+    nonStrikerId: String?,
+    nonStrikerName: String,
+    availableReplacements: Map<String, String>,
+    onDismiss: () -> Unit,
+    onConfirm: (retiredPlayerId: String, replacementId: String) -> Unit
+) {
+    // Defaults to the striker since that's who's actually facing the bowling right now, but the
+    // scorer can switch to the non-striker if that's who actually needs to go off.
+    var retiring by remember { mutableStateOf(strikerId) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("অসুস্থ / আহত — বিশ্রামে যাচ্ছে") },
+        text = {
+            Column {
+                Text("কে অসুস্থ/আহত হয়ে বিশ্রামে যাচ্ছে?")
+                Row {
+                    TextButton(onClick = { retiring = strikerId }) { Text(strikerName + if (retiring == strikerId) " ✓" else "") }
+                    TextButton(onClick = { retiring = nonStrikerId }) { Text(nonStrikerName + if (retiring == nonStrikerId) " ✓" else "") }
+                }
+                Spacer(Modifier.height(8.dp))
+                if (availableReplacements.isEmpty()) {
+                    // Every remaining player is either already batting, already out, or already
+                    // sitting out retired hurt themselves — nobody's actually free to come in.
+                    Text(
+                        "বাকি কোনো ব্যাটসম্যান নেই যাকে পাঠানো যায় — এখন রিটায়ার্ড হার্ট করা যাবে না।",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    Text("কে ব্যাটিংয়ে আসছে?")
+                    availableReplacements.forEach { (id, name) ->
+                        TextButton(onClick = { retiring?.let { onConfirm(it, id) } }) { Text(name) }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("বাতিল") } }
+    )
+}
+
+/**
+ * A popup listing everyone on the bowling side, for picking who bowls next. Used in two
+ * different situations:
+ *  - The MANDATORY pick right after an over ends (real cricket doesn't allow the same bowler to
+ *    bowl two overs back to back) — `excludeId` is that bowler, and `dismissible = false` means
+ *    there's no way to close this without picking someone.
+ *  - The ANYTIME "বোলার বদলাও" button, for when the current bowler needs to be swapped mid-over
+ *    (e.g. an injury) — `excludeId` is just the CURRENT bowler (picking the same person again
+ *    wouldn't be a change), and `dismissible = true` lets the scorer cancel out of it.
+ */
+@Composable
+private fun BowlerSelectDialog(
+    title: String,
+    bowlingPlayerNames: Map<String, String>,
+    excludeId: String?,
+    dismissible: Boolean,
+    onPicked: (String) -> Unit,
+    onDismiss: () -> Unit = {}
+) {
+    // If leaving out excludeId would leave NOBODY to pick (e.g. a tiny 2-player quick match),
+    // show everyone anyway — better to allow a technically-against-the-rules repeat bowler than
+    // to leave the scorer stuck with an empty list and no way to carry on scoring.
+    val allIds = bowlingPlayerNames.keys.toList()
+    val choices = allIds.filter { it != excludeId }.ifEmpty { allIds }
+    AlertDialog(
+        onDismissRequest = { if (dismissible) onDismiss() },
+        title = { Text(title) },
+        text = {
+            Column {
+                choices.forEach { id ->
+                    TextButton(onClick = { onPicked(id) }) { Text(bowlingPlayerNames[id] ?: id) }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { if (dismissible) TextButton(onClick = onDismiss) { Text("বাতিল") } }
+    )
 }

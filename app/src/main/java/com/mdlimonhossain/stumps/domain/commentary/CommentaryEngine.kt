@@ -1,5 +1,6 @@
 package com.mdlimonhossain.stumps.domain.commentary
 
+import com.mdlimonhossain.stumps.domain.model.DismissalType
 import com.mdlimonhossain.stumps.domain.model.ExtraType
 import com.mdlimonhossain.stumps.domain.scoring.BallRecord
 
@@ -41,12 +42,22 @@ object CommentaryEngine {
 
         // Walk through every ball in the order it actually happened.
         for (ball in balls.sortedBy { it.sequence }) {
+            // A "retirement" marker (see ScoringEngine's own comment on BallRecord.dismissalType)
+            // isn't a real ball bowled at all — it must NOT get an over/ball number of its own
+            // or count towards the 6-ball over, same as ScoringEngine treats it.
+            val isRetirement = !ball.isWicket && ball.dismissalType == DismissalType.RETIRED_HURT
             runningRuns += ball.runsThisBall
             if (ball.isWicket) runningWickets += 1
 
             // Cricket balls are labelled like "3.4" (over 3, 4th ball). A "*" at the end marks
-            // an extra ball (wide/no-ball) that doesn't count towards the 6-ball over.
-            val label = if (ball.isLegalDelivery) "${overNumber}.${legalBallsInOver + 1}" else "${overNumber}.${legalBallsInOver + 1}*"
+            // an extra ball (wide/no-ball) that doesn't count towards the 6-ball over. A
+            // retirement shows the CURRENT (not-yet-incremented) position, since it happened
+            // "between" balls rather than being one itself.
+            val label = when {
+                isRetirement -> "${overNumber}.${legalBallsInOver}"
+                ball.isLegalDelivery -> "${overNumber}.${legalBallsInOver + 1}"
+                else -> "${overNumber}.${legalBallsInOver + 1}*"
+            }
             // Try to show a real player name if we have one, otherwise just fall back to their id.
             val batsman = playerNames[ball.strikerId] ?: ball.strikerId
             val bowler = playerNames[ball.bowlerId] ?: ball.bowlerId
@@ -54,6 +65,11 @@ object CommentaryEngine {
             // Pick the right sentence template depending on what actually happened on this ball.
             // Kotlin's "when" here works like a big if/else-if chain — the FIRST matching line wins.
             val text = when {
+                isRetirement -> {
+                    val retiredName = playerNames[ball.dismissedPlayerId] ?: ball.dismissedPlayerId ?: batsman
+                    val incomingName = playerNames[ball.newBatsmanId] ?: ball.newBatsmanId ?: "?"
+                    "$retiredName অসুস্থ/আহত হয়ে বিশ্রামে গেলো — $incomingName ব্যাটিংয়ে আসলো"
+                }
                 ball.isWicket -> "উইকেট! $batsman আউট (${ball.dismissalType?.name ?: "?"}) — $bowler-এর শিকার"
                 ball.extraType == ExtraType.WIDE -> "ওয়াইড — $bowler"
                 ball.extraType == ExtraType.NO_BALL -> "নো বল! " + (if (ball.runsOffBat > 0) "$batsman ${ball.runsOffBat} রান নিলো" else "$bowler ওভারস্টেপ করেছে")
@@ -67,8 +83,9 @@ object CommentaryEngine {
 
             lines.add(CommentaryLine(label, text, "$runningRuns/$runningWickets"))
 
-            // Same "6 legal balls = one over finished" counting as ScoringEngine uses.
-            if (ball.isLegalDelivery) {
+            // Same "6 legal balls = one over finished" counting as ScoringEngine uses — a
+            // retirement marker skips this entirely, exactly like it skips it there.
+            if (ball.isLegalDelivery && !isRetirement) {
                 legalBallsInOver += 1
                 if (legalBallsInOver == 6) {
                     legalBallsInOver = 0

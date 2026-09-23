@@ -72,7 +72,11 @@ object PdfScorecardExporter {
             y += LINE_HEIGHT
             s.batsmanFigures.forEach { (name, fig) ->
                 newPageIfNeeded(1)
-                val status = if (fig.isOut) fig.dismissalType?.name ?: "out" else "not out"
+                val status = when {
+                    fig.isOut -> fig.dismissalType?.name ?: "out"
+                    fig.isRetiredHurt -> "retired hurt"
+                    else -> "not out"
+                }
                 // "%-20s %3d (%3d) %s" is a text-formatting template: %-20s means "the name,
                 // padded with spaces to at least 20 characters wide", %3d means "a number,
                 // right-aligned in 3 characters" — this is what keeps the columns lined up.

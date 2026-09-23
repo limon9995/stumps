@@ -209,9 +209,14 @@ private fun ScorecardTab(summary: InningsSummary) {
             Text(text = "No data to show", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         s.batsmanFigures.forEach { (name, fig) ->
+            val status = when {
+                fig.isOut -> fig.dismissalType?.name ?: "out"
+                fig.isRetiredHurt -> "retired hurt"
+                else -> "not out"
+            }
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(text = name, modifier = Modifier.weight(1f))
-                Text(text = "${fig.runs} (${fig.ballsFaced}) ${if (fig.isOut) fig.dismissalType?.name ?: "out" else "not out"}", fontSize = 12.sp)
+                Text(text = "${fig.runs} (${fig.ballsFaced}) $status", fontSize = 12.sp)
             }
         }
         Spacer(Modifier.height(20.dp))

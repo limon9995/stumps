@@ -126,6 +126,28 @@ class MatchViewModel(
         }
     }
 
+    /**
+     * Called when a batsman retires hurt (feeling unwell/injured) and a replacement comes in.
+     * Unlike recordWicket, this does NOT count as a dismissal (isWicket = false) — the real
+     * cricket rule is that a retired batsman can come back later to resume their innings, so
+     * they must not be shown as "out". dismissalType is still set to RETIRED_HURT purely so
+     * ScoringEngine can recognise this ball as a retirement rather than an ordinary one; see its
+     * own comment on how it's handled specially.
+     */
+    fun recordRetiredHurt(retiredPlayerId: String, replacementBatsmanId: String) {
+        val current = liveInnings.value ?: return
+        viewModelScope.launch {
+            val ball = repository.recordBall(
+                innings = current.innings, state = current.state,
+                runsOffBat = 0, extraType = null, extraRuns = 0, runsRun = 0,
+                isWicket = false, dismissalType = DismissalType.RETIRED_HURT,
+                dismissedPlayerId = retiredPlayerId, newBatsmanId = replacementBatsmanId,
+                selectedBowlerId = null
+            )
+            mirrorIfLive(current.match.isLive) { liveBroadcastRepository.pushBall(current.match.id, ball) }
+        }
+    }
+
     /** Called when the scorer taps "Undo" — removes the most recent ball. */
     fun undoLastBall() {
         val current = liveInnings.value ?: return

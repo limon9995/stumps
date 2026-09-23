@@ -58,7 +58,11 @@ data class MatchEntity(
     val createdAt: Long, // when this match was created, as a plain timestamp number
     val isLive: Boolean = false, // true while this match is being broadcast live for others to watch
     val shareCode: String? = null, // the short code viewers type in to watch this match live
-    val format: String? = null // a MatchFormat enum name (e.g. "T10", "T20", "ODI") chosen at setup time, or null for old matches scored before this existed
+    val format: String? = null, // a MatchFormat enum name (e.g. "T10", "T20", "ODI") chosen at setup time, or null for old matches scored before this existed
+    // A short Bangla line like "Dhaka Tigers ৪৫ রানে জয়ী" (won by 45 runs), filled in by
+    // MatchRepository.finalizeCompletedMatch once both innings are done — null until then, and
+    // still null for any older match scored before this existed.
+    val resultText: String? = null
 )
 
 /**

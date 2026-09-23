@@ -50,7 +50,7 @@ import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentTeamEntity
         ClubEntity::class,
         FollowEntity::class
     ],
-    version = 6, // bumped from 5 when tournaments.clubName/city/season/startDate/endDate/ballType were added
+    version = 7, // bumped from 6 when matches.resultText was added
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -118,6 +118,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Adds matches.resultText — the saved "won by X runs/wickets" line, filled in once a
+        // match's second innings finishes (see MatchRepository.finalizeCompletedMatch). Every
+        // match scored before this existed just gets NULL, same idea as the migrations above.
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE matches ADD COLUMN resultText TEXT")
+            }
+        }
+
         // We only ever want ONE database connection open at a time for the whole app — opening
         // multiple would waste memory and could cause weird bugs. @Volatile + synchronized here
         // is a standard Kotlin/Java pattern called a "singleton": the first time getInstance is
@@ -132,7 +141,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "stumps.db" // the actual filename this gets saved as on the phone's storage
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     // A real migration now exists for every version bump so far (see above). This
                     // destructive fallback only kicks in for a version jump nobody's written a
                     // migration for yet — every NEW schema change from here on should add its own

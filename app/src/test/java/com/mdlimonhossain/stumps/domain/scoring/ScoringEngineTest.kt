@@ -269,4 +269,72 @@ class ScoringEngineTest {
         assertEquals(6, s.partnerships.first().runs)
         assertEquals(2, s.partnerships.first().legalBalls)
     }
+
+    @Test
+    fun retiredHurt_isNotAWicket_andBringsInReplacement() {
+        val retireBall = BallRecord(
+            sequence = 1, bowlerId = BOWLER, strikerId = STRIKER, nonStrikerId = NON_STRIKER,
+            runsOffBat = 0, extraType = null, extraRuns = 0, runsRun = 0,
+            isWicket = false, dismissalType = DismissalType.RETIRED_HURT, dismissedPlayerId = STRIKER,
+            newBatsmanId = "batsman_C"
+        )
+        val s = state(listOf(retireBall))
+        // Retiring must NEVER count as a fall of wicket — that's the whole point of the rule.
+        assertEquals(0, s.totalWickets)
+        assertFalse(s.batsmanFigures[STRIKER]?.isOut == true)
+        assertTrue(s.batsmanFigures[STRIKER]?.isRetiredHurt == true)
+        // Nor does it use up a ball of the over — nobody actually bowled anything.
+        assertEquals(0, s.legalBallsBowled)
+        assertEquals("batsman_C", s.strikerId)
+        assertEquals(NON_STRIKER, s.nonStrikerId)
+    }
+
+    @Test
+    fun retiredHurt_doesNotConsumeAnOverBall() {
+        val retireBall = BallRecord(
+            sequence = 4, bowlerId = BOWLER, strikerId = STRIKER, nonStrikerId = NON_STRIKER,
+            runsOffBat = 0, extraType = null, extraRuns = 0, runsRun = 0,
+            isWicket = false, dismissalType = DismissalType.RETIRED_HURT, dismissedPlayerId = STRIKER,
+            newBatsmanId = "batsman_C"
+        )
+        // 3 normal balls, then a retirement (not a real delivery), then 3 more normal balls —
+        // the over should still complete after exactly 6 REAL balls, unaffected by the retirement
+        // sitting in between them.
+        val balls = listOf(normalBall(1, 0), normalBall(2, 0), normalBall(3, 0), retireBall) +
+            (5..7).map { normalBall(it, 0, striker = "batsman_C") }
+        val s = state(balls)
+        assertEquals(6, s.legalBallsBowled)
+        assertTrue(s.isOverJustCompleted)
+    }
+
+    @Test
+    fun retiredHurt_canReturnLaterAndResumesAccumulatingRuns() {
+        // STRIKER scores 6 runs, then retires hurt — batsman_C comes in as a temporary replacement.
+        val retireBall = BallRecord(
+            sequence = 3, bowlerId = BOWLER, strikerId = STRIKER, nonStrikerId = NON_STRIKER,
+            runsOffBat = 0, extraType = null, extraRuns = 0, runsRun = 0,
+            isWicket = false, dismissalType = DismissalType.RETIRED_HURT, dismissedPlayerId = STRIKER,
+            newBatsmanId = "batsman_C"
+        )
+        // batsman_C takes strike, runs a single (odd — swaps ends, so NON_STRIKER is now on strike).
+        val singleByReplacement = normalBall(4, 1, striker = "batsman_C", nonStriker = NON_STRIKER)
+        // NON_STRIKER then gets bowled — and the fit-again STRIKER is brought BACK in, resuming
+        // their innings, instead of a brand new batsman.
+        val wicketBringsBackStriker = BallRecord(
+            sequence = 5, bowlerId = BOWLER, strikerId = NON_STRIKER, nonStrikerId = "batsman_C",
+            runsOffBat = 0, extraType = null, extraRuns = 0, runsRun = 0,
+            isWicket = true, dismissalType = DismissalType.BOWLED, dismissedPlayerId = NON_STRIKER,
+            newBatsmanId = STRIKER
+        )
+        val s = state(listOf(normalBall(1, 4), normalBall(2, 2), retireBall, singleByReplacement, wicketBringsBackStriker))
+
+        // Only the genuine bowled dismissal counts as a wicket — the earlier retirement never did.
+        assertEquals(1, s.totalWickets)
+        // STRIKER's 6 runs from before retiring are still there, untouched by the time away.
+        assertEquals(6, s.batsmanFigures[STRIKER]?.runs)
+        // And they're marked as active again, not out, now that they've been sent back in.
+        assertFalse(s.batsmanFigures[STRIKER]?.isRetiredHurt == true)
+        assertFalse(s.batsmanFigures[STRIKER]?.isOut == true)
+        assertEquals(STRIKER, s.strikerId)
+    }
 }

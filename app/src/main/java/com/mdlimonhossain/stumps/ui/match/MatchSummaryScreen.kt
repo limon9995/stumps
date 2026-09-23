@@ -28,6 +28,7 @@ import com.mdlimonhossain.stumps.data.export.PdfScorecardExporter
 import com.mdlimonhossain.stumps.data.export.ShareUtils
 import com.mdlimonhossain.stumps.domain.commentary.CommentaryEngine
 import com.mdlimonhossain.stumps.domain.repository.InningsSummary
+import com.mdlimonhossain.stumps.domain.repository.matchResultText
 import com.mdlimonhossain.stumps.ui.designsystem.AppCard
 import com.mdlimonhossain.stumps.ui.designsystem.ScreenFadeThrough
 import com.mdlimonhossain.stumps.ui.match.charts.OverRunsChart
@@ -58,6 +59,13 @@ fun MatchSummaryScreen(
             .padding(24.dp)
     ) {
         Text(text = "ম্যাচ শেষ", style = MaterialTheme.typography.headlineLarge)
+        // "Team X won by Y runs/wickets" (or "match tied") — only shows once both innings are
+        // actually done; a match that only got as far as innings 1 (e.g. someone exited early)
+        // just shows nothing here since matchResultText returns null.
+        matchResultText(innings)?.let { result ->
+            Spacer(Modifier.height(4.dp))
+            Text(text = result, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        }
         Spacer(Modifier.height(12.dp))
 
         Row {
@@ -90,7 +98,12 @@ fun MatchSummaryScreen(
                     s.batsmanFigures.forEach { (id, fig) ->
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(text = id)
-                            Text(text = "${fig.runs} (${fig.ballsFaced}) ${if (fig.isOut) fig.dismissalType?.name ?: "out" else "not out"}")
+                            val status = when {
+                                fig.isOut -> fig.dismissalType?.name ?: "out"
+                                fig.isRetiredHurt -> "retired hurt"
+                                else -> "not out"
+                            }
+                            Text(text = "${fig.runs} (${fig.ballsFaced}) $status")
                         }
                     }
                     Spacer(Modifier.height(8.dp))

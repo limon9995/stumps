@@ -102,12 +102,17 @@ fun ResumeMatchScreen(matchId: String, onFinished: () -> Unit) {
                 bowlingPlayerNames = state.bowlingNames,
                 onRuns = viewModel::recordRuns,
                 onExtra = viewModel::recordExtra,
-                onWicket = { type, dismissedId, _, fielderId ->
-                    val nextBatsman = state.battingNamesList.firstOrNull { name ->
-                        live?.state?.batsmanFigures?.get(name)?.isOut != true && name != live?.state?.strikerId && name != live?.state?.nonStrikerId
+                onWicket = { type, dismissedId, explicitIncomingId, fielderId, selectedBowlerId ->
+                    // See the matching comment in MatchFlow.kt for why explicitIncomingId is
+                    // checked first, and isRetiredHurt is excluded from the auto-pick fallback.
+                    val nextBatsman = explicitIncomingId ?: state.battingNamesList.firstOrNull { name ->
+                        val fig = live?.state?.batsmanFigures?.get(name)
+                        fig?.isOut != true && fig?.isRetiredHurt != true &&
+                            name != live?.state?.strikerId && name != live?.state?.nonStrikerId
                     }
-                    viewModel.recordWicket(type, dismissedId, nextBatsman, fielderId = fielderId)
+                    viewModel.recordWicket(type, dismissedId, nextBatsman, selectedBowlerId = selectedBowlerId, fielderId = fielderId)
                 },
+                onRetiredHurt = viewModel::recordRetiredHurt,
                 onUndo = viewModel::undoLastBall,
                 // If the innings finishes RIGHT HERE during a resumed session, just exit to home
                 // rather than trying to chain into the second-innings-lineup flow — the same

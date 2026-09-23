@@ -95,14 +95,19 @@ fun MatchFlowScreen(currentUid: String, onFinished: () -> Unit) {
                 bowlingPlayerNames = bowlingNameMap,
                 onRuns = viewModel::recordRuns,
                 onExtra = viewModel::recordExtra,
-                onWicket = { type, dismissedId, _, fielderId ->
-                    // Automatically pick the next incoming batsman: the first player in the
-                    // batting lineup who isn't already out and isn't already at the crease.
-                    val nextBatsman = battingNames.firstOrNull { name ->
-                        live?.state?.batsmanFigures?.get(name)?.isOut != true && name != live?.state?.strikerId && name != live?.state?.nonStrikerId
+                onWicket = { type, dismissedId, explicitIncomingId, fielderId, selectedBowlerId ->
+                    // If the WicketDialog's "কে ব্যাটিংয়ে আসছে?" step gave us a specific choice
+                    // (bringing back a retired-hurt batsman), use exactly that. Otherwise fall
+                    // back to auto-picking: the first player in the batting lineup who isn't
+                    // already out, isn't sitting out retired hurt, and isn't already at the crease.
+                    val nextBatsman = explicitIncomingId ?: battingNames.firstOrNull { name ->
+                        val fig = live?.state?.batsmanFigures?.get(name)
+                        fig?.isOut != true && fig?.isRetiredHurt != true &&
+                            name != live?.state?.strikerId && name != live?.state?.nonStrikerId
                     }
-                    viewModel.recordWicket(type, dismissedId, nextBatsman, fielderId = fielderId)
+                    viewModel.recordWicket(type, dismissedId, nextBatsman, selectedBowlerId = selectedBowlerId, fielderId = fielderId)
                 },
+                onRetiredHurt = viewModel::recordRetiredHurt,
                 onUndo = viewModel::undoLastBall,
                 onInningsComplete = {
                     val finished = live ?: return@ScoringScreen
@@ -155,7 +160,13 @@ fun MatchFlowScreen(currentUid: String, onFinished: () -> Unit) {
             // LaunchedEffect runs its block of code once, the first time this composable
             // appears with this particular matchId (and again if matchId ever changes) — the
             // right place to trigger a one-off suspend function call like loading the final scorecard.
-            LaunchedEffect(s.matchId) { innings = app.matchRepository.getFinalInningsStates(s.matchId) }
+            LaunchedEffect(s.matchId) {
+                // Save the match as actually "COMPLETED" (with its win/loss result) now that
+                // we're truly at the final scorecard — see finalizeCompletedMatch's own comment
+                // for why this was missing before (matches used to stay "LIVE" forever).
+                app.matchRepository.finalizeCompletedMatch(s.matchId)
+                innings = app.matchRepository.getFinalInningsStates(s.matchId)
+            }
             innings?.let { MatchSummaryScreen(innings = it, onDone = onFinished) }
                 ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         }
