@@ -6,7 +6,9 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -99,10 +102,18 @@ fun ScoringScreen(
         }
 
         Spacer(Modifier.height(16.dp))
-        AppCard(modifier = Modifier.fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)) {
+        // "ব্যাটসম্যান" (batsmen) section — each batsman now gets their own bordered box, with
+        // the striker's box drawn in a stronger colour, so it's obvious at a glance WHO is
+        // currently facing the ball. Runs from the buttons below always go to whoever is shown
+        // as the striker here.
+        Text(text = "ব্যাটসম্যান", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(6.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             BatsmanRow(name = battingPlayerNames[s.strikerId] ?: "?", figures = s.batsmanFigures[s.strikerId], isStriker = true)
             BatsmanRow(name = battingPlayerNames[s.nonStrikerId] ?: "?", figures = s.batsmanFigures[s.nonStrikerId], isStriker = false)
-            Spacer(Modifier.height(8.dp))
+        }
+        Spacer(Modifier.height(10.dp))
+        AppCard(modifier = Modifier.fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)) {
             val bowlerFigures = s.bowlerFigures[s.currentBowlerId]
             Text(
                 text = "বোলার: ${bowlingPlayerNames[s.currentBowlerId] ?: "?"}  ${bowlerFigures?.overs ?: "0.0"}-${bowlerFigures?.runsConceded ?: 0}-${bowlerFigures?.wickets ?: 0}",
@@ -112,7 +123,11 @@ fun ScoringScreen(
 
         Spacer(Modifier.height(20.dp))
         Text(text = "রান", style = MaterialTheme.typography.titleLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Spacer(Modifier.height(4.dp))
+        // "রান" (runs) section — fillMaxWidth() + weight(1f) on every button makes the six
+        // buttons share the screen's width equally, so all six ALWAYS fit on screen instead of
+        // the last one (6) getting pushed off the right edge on narrower phones.
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf(0, 1, 2, 3, 4, 6).forEach { r ->
                 // 4s and 6s get their own colour (the theme's gold "trophy" tertiary shade) so
                 // boundaries visually pop out from the ordinary run buttons next to them.
@@ -122,7 +137,8 @@ fun ScoringScreen(
                     // went, via the shot-direction popup, for the wagon wheel chart. For every
                     // other run value, just record it immediately (no direction needed).
                     onClick = { if (isBoundary) pendingBoundaryRuns = r else onRuns(r, null) },
-                    modifier = Modifier.height(52.dp),
+                    modifier = Modifier.weight(1f).height(52.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp),
                     shape = MaterialTheme.shapes.medium,
                     colors = if (isBoundary) {
                         ButtonDefaults.buttonColors(
@@ -137,6 +153,8 @@ fun ScoringScreen(
         }
 
         Spacer(Modifier.height(16.dp))
+        Text(text = "অন্যান্য", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { showExtraDialog = true }) { Text("Extra") }
             OutlinedButton(onClick = { showWicketDialog = true }) { Text("Wicket") }
@@ -153,6 +171,9 @@ fun ScoringScreen(
                 Text(if (targetReached) "টার্গেট শেষ — ম্যাচ শেষ করো" else "ইনিংস শেষ — এগিয়ে যাও")
             }
         }
+
+        Spacer(Modifier.height(20.dp))
+        ScoringGuideSection()
     }
 
     // Each of these three popups only actually appears on screen when its "show..." state is
@@ -223,12 +244,65 @@ private fun LiveBadge() {
     }
 }
 
-/** One line showing a batsman's name (with a "*" if they're on strike) and their runs (balls). */
+/**
+ * One boxed row showing a batsman's name and their runs (balls) — the striker (the one facing
+ * the next ball, and the one who receives runs when a run button is tapped) gets a thicker,
+ * coloured border and a tinted background so the two batsmen are easy to tell apart at a
+ * glance, instead of the only difference being a small "*" character.
+ */
 @Composable
 private fun BatsmanRow(name: String, figures: com.mdlimonhossain.stumps.domain.scoring.BatsmanFigures?, isStriker: Boolean) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(text = (if (isStriker) "* " else "") + name, style = MaterialTheme.typography.bodyLarge)
+    val borderColor = if (isStriker) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+    val backgroundColor = if (isStriker) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(backgroundColor, RoundedCornerShape(10.dp))
+            .border(BorderStroke(if (isStriker) 2.dp else 1.dp, borderColor), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column {
+            Text(text = name, style = MaterialTheme.typography.bodyLarge)
+            // Spell out "স্ট্রাইকে" (on strike) in words too, not just the "*" mark — makes it
+            // unmistakable which batsman the next ball's runs will be added to.
+            if (isStriker) {
+                Text(text = "স্ট্রাইকে — রান এখানে যোগ হবে", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
         Text(text = "${figures?.runs ?: 0} (${figures?.ballsFaced ?: 0})", style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/**
+ * A collapsed-by-default "how does this screen work?" help card. It starts closed (just a
+ * one-line prompt) so it doesn't clutter the screen, and tapping it expands to show the full
+ * plain-language guide — tapping again collapses it back.
+ */
+@Composable
+private fun ScoringGuideSection() {
+    var expanded by remember { mutableStateOf(false) }
+    AppCard(modifier = Modifier.fillMaxWidth(), onClick = { expanded = !expanded }) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(text = "কীভাবে ব্যবহার করবো? (বিস্তারিত)", style = MaterialTheme.typography.titleSmall)
+            Text(text = if (expanded) "▲" else "▼", style = MaterialTheme.typography.titleSmall)
+        }
+        if (expanded) {
+            Spacer(Modifier.height(10.dp))
+            // Each line explains one part of the screen in plain language, for someone who has
+            // never scored a cricket match on this app before.
+            listOf(
+                "উপরে যে ব্যাটসম্যানের ঘরে \"স্ট্রাইকে\" লেখা এবং বর্ডার রঙিন, রান বাটনে চাপ দিলে সেই রান তার নামেই যোগ হবে।",
+                "১ বা ৩ রান নিলে স্ট্রাইক বদলে যাবে (অন্য ব্যাটসম্যান স্ট্রাইকে চলে আসবে); ০, ২ বা ৪ রানে স্ট্রাইক বদলায় না।",
+                "প্রতি ওভার শেষে স্ট্রাইক এমনিতেই বদলে যায়, ওভারের শেষ বলে যাই রান হোক না কেন।",
+                "৪ বা ৬ বাটনে চাপলে বল কোন দিকে গেছে জিজ্ঞেস করবে — এটা শুধু Wagon Wheel চার্টের জন্য তথ্য জমা রাখে; \"স্কিপ করো\" চাপলেও রানটা ঠিকই যোগ হয়ে যাবে।",
+                "Extra বাটনে Wide, No Ball, Bye বা Leg Bye যোগ করা যায়।",
+                "Wicket বাটনে কে আউট হলো এবং কীভাবে আউট হলো (বোল্ড, ক্যাচ, রান আউট ইত্যাদি) লেখা যায়।",
+                "Undo বাটনে সবশেষ বলটি ভুল হলে বাতিল করা যায়।"
+            ).forEach { line ->
+                Text(text = "•  $line", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 6.dp))
+            }
+        }
     }
 }
 
