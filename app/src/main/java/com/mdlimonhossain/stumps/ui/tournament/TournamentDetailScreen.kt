@@ -158,9 +158,10 @@ fun TournamentDetailScreen(tournamentId: String, organizerUid: String, onBack: (
                 teams = teams,
                 viewerUid = organizerUid,
                 onOpenCreateTeam = onOpenCreateTeam,
-                onAddTeam = { teamId -> viewModel.addTeam(tournamentId, teamId) }
+                onAddTeam = { teamId -> viewModel.addTeam(tournamentId, teamId) },
+                onGoToMatches = { tab = DetailTab.MATCHES }
             )
-            DetailTab.MATCHES -> MatchesTab(fixtures = fixtures, teams = teams, onOpenFixture = { activeFixture = it })
+            DetailTab.MATCHES -> MatchesTab(fixtures = fixtures, teams = teams, onOpenFixture = { activeFixture = it }, onGoToTeams = { tab = DetailTab.TEAMS })
             DetailTab.POINTS -> PointsTab(standings = standings)
             DetailTab.STATISTICS -> StatisticsTab(leaderboards = leaderboards)
         }
@@ -268,8 +269,24 @@ private fun HomeTab(
             }) { Text(if (isFollowing) "Following ✓" else "Follow") }
         }
         Spacer(Modifier.height(4.dp))
+        // A match needs two teams. So until the tournament has at least 2 teams, this big
+        // button takes the organizer to the Teams tab (the real next step) instead of an empty
+        // Matches list that would just look broken.
+        val needsTeams = teams.size < 2
+        if (needsTeams) {
+            NextStepHint(
+                text = if (teams.isEmpty()) {
+                    "পরের ধাপ: টুর্নামেন্টে কমপক্ষে ২টা টিম যোগ করো। টিম যোগ করলেই ম্যাচগুলো নিজে নিজে তৈরি হয়ে যাবে।"
+                } else {
+                    "আর ১টা টিম যোগ করো — তাহলেই প্রথম ম্যাচ তৈরি হয়ে যাবে।"
+                }
+            )
+            Spacer(Modifier.height(8.dp))
+        }
         Row(modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = onSeeMatches, modifier = Modifier.weight(1f)) { Text("START / SCHEDULE MATCH", fontSize = 12.sp) }
+            Button(onClick = if (needsTeams) onSeeTeams else onSeeMatches, modifier = Modifier.weight(1f)) {
+                Text(if (needsTeams) "টিম যোগ করো" else "START / SCHEDULE MATCH", fontSize = 12.sp)
+            }
         }
 
         Spacer(Modifier.height(20.dp))
@@ -402,7 +419,8 @@ private fun TeamsTab(
     teams: List<com.mdlimonhossain.stumps.data.local.db.tournament.TournamentTeamEntity>,
     viewerUid: String,
     onOpenCreateTeam: () -> Unit,
-    onAddTeam: (String) -> Unit
+    onAddTeam: (String) -> Unit,
+    onGoToMatches: () -> Unit
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as StumpsApplication
@@ -410,11 +428,27 @@ private fun TeamsTab(
     var showAddDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            TextButton(onClick = { showAddDialog = true }) { Text("ADD TEAM") }
+        Button(onClick = { showAddDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("+ টিম যোগ করো") }
+        Spacer(Modifier.height(8.dp))
+        // Tell the organizer where they are in the setup: under 2 teams = keep adding,
+        // 2 or more = matches are ready, go play them.
+        if (teams.size < 2) {
+            NextStepHint(text = "মোট ${teams.size}টা টিম। ম্যাচ তৈরি হতে কমপক্ষে ২টা টিম লাগবে।")
+        } else {
+            NextStepHint(
+                text = "মোট ${teams.size}টা টিম — ম্যাচগুলো তৈরি হয়ে গেছে! Matches ট্যাবে গিয়ে ম্যাচ শুরু করো।",
+                actionLabel = "ম্যাচ দেখো",
+                onAction = onGoToMatches
+            )
         }
+        Spacer(Modifier.height(8.dp))
         if (teams.isEmpty()) {
-            EmptyState(icon = Icons.Filled.AccountBox, title = "কোনো দল যোগ করা হয়নি", modifier = Modifier.weight(1f))
+            EmptyState(
+                icon = Icons.Filled.AccountBox,
+                title = "কোনো দল যোগ করা হয়নি",
+                subtitle = "উপরের বাটনে চেপে তোমার সেভ করা টিম বেছে নাও, অথবা নতুন টিম বানাও।",
+                modifier = Modifier.weight(1f)
+            )
         } else {
             LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize()) {
                 items(teams, key = { it.id }) { team ->
@@ -437,10 +471,17 @@ private fun TeamsTab(
             text = {
                 Column(modifier = Modifier.heightIn(max = 400.dp)) {
                     TextButton(onClick = { showAddDialog = false; onOpenCreateTeam() }) { Text("নতুন টিম তৈরি করো") }
+                    // Creating a team opens the Teams screen. It doesn't join this tournament by
+                    // itself, so remind the user to come back here and pick it from this list.
+                    Text(
+                        text = "নতুন টিম বানিয়ে ফিরে এসে এই তালিকা থেকে সেটা বেছে নিও।",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     androidx.compose.material3.HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                     if (pickable.isEmpty()) {
                         Text(
-                            text = "আর কোনো টিম যোগ করার মতো নেই।",
+                            text = if (myTeams.isEmpty()) "তোমার কোনো সেভ করা টিম নেই — আগে উপরের বাটনে একটা নতুন টিম বানাও।" else "তোমার সব টিম এই টুর্নামেন্টে যোগ হয়ে গেছে।",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(vertical = 12.dp)
@@ -464,6 +505,33 @@ private fun TeamsTab(
 }
 
 
+/**
+ * A small highlighted box that tells the organizer what to do NEXT in setting up the tournament
+ * (e.g. "add at least 2 teams"). It can have an optional button, like "ম্যাচ দেখো" (see matches).
+ */
+@Composable
+private fun NextStepHint(text: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.weight(1f)
+        )
+        // Only show the button if the caller gave us both a label and something to do.
+        if (actionLabel != null && onAction != null) {
+            TextButton(onClick = onAction) { Text(actionLabel) }
+        }
+    }
+}
+
 @Composable
 private fun TeamInitialsCircle(name: String) {
     Box(
@@ -479,10 +547,20 @@ private fun TeamInitialsCircle(name: String) {
 private fun MatchesTab(
     fixtures: List<TournamentFixtureEntity>,
     teams: List<com.mdlimonhossain.stumps.data.local.db.tournament.TournamentTeamEntity>,
-    onOpenFixture: (TournamentFixtureEntity) -> Unit
+    onOpenFixture: (TournamentFixtureEntity) -> Unit,
+    onGoToTeams: () -> Unit
 ) {
     if (fixtures.isEmpty()) {
-        EmptyState(icon = Icons.AutoMirrored.Filled.List, title = "এখনো কোনো ফিক্সচার তৈরি হয়নি")
+        // No fixtures yet always means "fewer than 2 teams" — fixtures are made automatically
+        // the moment a second (third, fourth...) team is added. So tell the user exactly that,
+        // and give them a button that takes them straight to where they can fix it.
+        EmptyState(
+            icon = Icons.AutoMirrored.Filled.List,
+            title = "এখনো কোনো ম্যাচ তৈরি হয়নি",
+            subtitle = "কমপক্ষে ২টা টিম যোগ করো — তাহলে প্রতিটা টিমের সাথে প্রতিটা টিমের ম্যাচ নিজে থেকেই এখানে চলে আসবে। এখন আছে ${teams.size}টা টিম।",
+            actionLabel = "টিম যোগ করো",
+            onAction = onGoToTeams
+        )
         return
     }
     LazyColumn(modifier = Modifier.padding(horizontal = 20.dp)) {

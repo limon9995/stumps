@@ -36,6 +36,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,7 +73,11 @@ fun TournamentListScreen(
     // If the organizer has a registered club, its name/city/ball-type pre-fill the create form —
     // same idea as the reference app showing "Limon's Club" already typed in.
     val myClubs by app.clubRepository.observeClubsForUser(uid).collectAsState(initial = emptyList())
-    var showCreate by remember { mutableStateOf(startWithCreateForm) }
+    // rememberSaveable (instead of plain remember) keeps this value even while this screen is
+    // hidden behind another one. Without it, pressing Back from a just-created tournament would
+    // bring the user back to an EMPTY create form again (because this screen was opened with
+    // startWithCreateForm = true), which made it look like the tournament hadn't been made at all.
+    var showCreate by rememberSaveable { mutableStateOf(startWithCreateForm) }
 
     if (showCreate) {
         TournamentSetupForm(
@@ -182,6 +187,8 @@ private fun TournamentSetupForm(
     // Only starts showing red error text once the user has tapped the create button at least
     // once — a fresh form shouldn't look broken before anyone has typed anything.
     var attemptedSubmit by remember { mutableStateOf(false) }
+    // Becomes true the moment a valid form is submitted, so the button can't fire twice.
+    var isSaving by remember { mutableStateOf(false) }
 
     val dateFormat = remember { SimpleDateFormat("d MMM yyyy", Locale.getDefault()) }
 
@@ -219,32 +226,41 @@ private fun TournamentSetupForm(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = season,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("সিজন / বছর") },
-            placeholder = { Text("বেছে নাও") },
+        // Season, start date and end date are "tap to pick" boxes, not typing boxes — see
+        // PickerField at the bottom of this file for why they need a special wrapper.
+        PickerField(
+            value = season.takeIf { it.isNotBlank() }?.let { "Year $it" } ?: "",
+            label = "সিজন / বছর",
+            placeholder = "বেছে নিতে ট্যাপ করো",
             isError = attemptedSubmit && seasonMissing,
-            supportingText = { if (attemptedSubmit && seasonMissing) Text("একটা সিজন/বছর বেছে নাও") },
-            modifier = Modifier.fillMaxWidth().clickable { showSeasonPicker = true }
+            errorText = "একটা সিজন/বছর বেছে নাও",
+            onClick = { showSeasonPicker = true },
+            modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(8.dp))
+        // The end date can't come BEFORE the start date — a tournament can't finish before it starts.
+        val start = startDateMillis
+        val end = endDateMillis
+        val endBeforeStart = start != null && end != null && end < start
         Row(modifier = Modifier.fillMaxWidth()) {
-            OutlinedTextField(
+            PickerField(
                 value = startDateMillis?.let { dateFormat.format(Date(it)) } ?: "",
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("শুরুর তারিখ") },
-                modifier = Modifier.weight(1f).clickable { showStartPicker = true }
+                label = "শুরুর তারিখ",
+                placeholder = "ঐচ্ছিক",
+                isError = false,
+                errorText = null,
+                onClick = { showStartPicker = true },
+                modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.width(8.dp))
-            OutlinedTextField(
+            PickerField(
                 value = endDateMillis?.let { dateFormat.format(Date(it)) } ?: "",
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("শেষের তারিখ") },
-                modifier = Modifier.weight(1f).clickable { showEndPicker = true }
+                label = "শেষের তারিখ",
+                placeholder = "ঐচ্ছিক",
+                isError = endBeforeStart,
+                errorText = "শুরুর আগে শেষ হতে পারে না",
+                onClick = { showEndPicker = true },
+                modifier = Modifier.weight(1f)
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -275,7 +291,7 @@ private fun TournamentSetupForm(
 
         Spacer(Modifier.height(20.dp))
         val overs = oversText.toIntOrNull() ?: 0
-        val isValid = !nameMissing && !clubNameMissing && !cityMissing && !seasonMissing && overs > 0
+        val isValid = !nameMissing && !clubNameMissing && !cityMissing && !seasonMissing && overs > 0 && !endBeforeStart
         if (attemptedSubmit && !isValid) {
             Text(
                 text = "উপরে লাল করে দেখানো জায়গাগুলো ঠিক করো, তারপর আবার চেষ্টা করো।",
@@ -289,15 +305,17 @@ private fun TournamentSetupForm(
         Button(
             onClick = {
                 attemptedSubmit = true
-                if (isValid) {
+                // `isSaving` stops a fast double-tap from creating the same tournament twice.
+                if (isValid && !isSaving) {
+                    isSaving = true
                     onCreate(
-                        name, overs, venue.ifBlank { null }, clubName.ifBlank { null }, city.ifBlank { null },
+                        name.trim(), overs, venue.trim().ifBlank { null }, clubName.trim().ifBlank { null }, city.trim().ifBlank { null },
                         season.ifBlank { null }, startDateMillis, endDateMillis, ballType
                     )
                 }
             },
             modifier = Modifier.fillMaxWidth()
-        ) { Text("টুর্নামেন্ট তৈরি করো") }
+        ) { Text(if (isSaving) "তৈরি হচ্ছে..." else "টুর্নামেন্ট তৈরি করো") }
         Spacer(Modifier.height(8.dp))
         TextButton(onClick = onCancel) { Text("বাতিল") }
     }
@@ -361,4 +379,44 @@ private fun SeasonPickerDialog(selected: String, onDismiss: () -> Unit, onPick: 
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("বন্ধ করো") } }
     )
+}
+
+/**
+ * A text box that you TAP to pick something (a season, a date) instead of typing into.
+ *
+ * Why this exists: a normal OutlinedTextField grabs every finger-tap for itself (to place the
+ * typing cursor), even when it's readOnly. So putting `.clickable { ... }` directly on the text
+ * field never runs — the tap is "eaten" before it gets there. That was exactly the bug where
+ * tapping Season / Start date / End date did nothing, and because Season is required, the
+ * whole "create tournament" button was stuck too.
+ *
+ * The fix: draw the text field as normal, then lay an invisible, same-size box ON TOP of it.
+ * The finger hits that invisible box first, and the box opens the picker.
+ */
+@Composable
+private fun PickerField(
+    value: String,
+    label: String,
+    placeholder: String,
+    isError: Boolean,
+    errorText: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {}, // never changes by typing — only through the picker
+            readOnly = true,
+            singleLine = true,
+            label = { Text(label) },
+            placeholder = { Text(placeholder) },
+            isError = isError,
+            supportingText = if (isError && errorText != null) { { Text(errorText) } } else null,
+            modifier = Modifier.fillMaxWidth()
+        )
+        // The invisible "tap catcher" — exactly as big as the text field underneath it
+        // (matchParentSize = "be the same size as the Box around me").
+        Box(modifier = Modifier.matchParentSize().clickable(onClick = onClick))
+    }
 }
