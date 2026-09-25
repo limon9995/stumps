@@ -77,7 +77,9 @@ fun MatchFlowScreen(currentUid: String, onFinished: () -> Unit) {
         )
 
         is MatchFlowStep.Scoring -> {
-            val battingIsA = battingIsTeamA(s.input)
+            // In the SECOND innings (firstInnings != null) the other team bats, so flip the
+            // toss-based answer. Without this the chase showed the wrong team's player names.
+            val battingIsA = battingIsTeamA(s.input) != (s.firstInnings != null)
             val battingNames = (if (battingIsA) s.input.teamAPlayers else s.input.teamBPlayers)
             val bowlingNames = (if (battingIsA) s.input.teamBPlayers else s.input.teamAPlayers)
             // A quick lookup map where the id AND the name are the same string (see the note

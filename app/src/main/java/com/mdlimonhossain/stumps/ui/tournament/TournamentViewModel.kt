@@ -7,6 +7,8 @@ import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentEntity
 import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentFixtureEntity
 import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentTeamEntity
 import com.mdlimonhossain.stumps.domain.repository.TournamentLeaderboards
+import com.mdlimonhossain.stumps.domain.repository.FixtureScore
+import com.mdlimonhossain.stumps.domain.repository.TournamentProgress
 import com.mdlimonhossain.stumps.domain.repository.TournamentRepository
 import com.mdlimonhossain.stumps.domain.tournament.TeamStanding
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -75,6 +77,35 @@ class TournamentDetailViewModel(private val repository: TournamentRepository, to
     // above — the Home tab's "Tournament Boundaries" numbers.
     private val _boundaryCounts = MutableStateFlow(0 to 0) // sixes to fours
     val boundaryCounts: StateFlow<Pair<Int, Int>> = _boundaryCounts
+
+    // Each fixture's mini scoreboard (fixture id -> scores/result) for the Matches tab, and the
+    // tournament's overall progress (league -> semi-finals -> final -> champion) for the Home
+    // tab. Both are worked out on demand, same reasoning as standings above.
+    private val _fixtureScores = MutableStateFlow<Map<String, FixtureScore>>(emptyMap())
+    val fixtureScores: StateFlow<Map<String, FixtureScore>> = _fixtureScores
+
+    private val _progress = MutableStateFlow(TournamentProgress())
+    val progress: StateFlow<TournamentProgress> = _progress
+
+    /** Recalculates every fixture's score AND where the tournament is up to. Called whenever the fixture list changes or a match finishes. */
+    fun refreshProgress(tournamentId: String) {
+        viewModelScope.launch {
+            _fixtureScores.value = repository.computeFixtureScores(tournamentId)
+            _progress.value = repository.computeProgress(tournamentId)
+        }
+    }
+
+    /**
+     * Creates the next stage's matches (semi-finals or the final) — the "সেমিফাইনাল শুরু করো" /
+     * "ফাইনাল শুরু করো" button. The new fixtures show up by themselves through the `fixtures`
+     * Flow above, which then triggers refreshProgress from the screen.
+     */
+    fun advanceStage(tournamentId: String) {
+        viewModelScope.launch {
+            repository.advanceToNextStage(tournamentId)
+            _progress.value = repository.computeProgress(tournamentId)
+        }
+    }
 
     /** Recalculates the points table right now and updates `standings` with the fresh result. */
     fun refreshStandings(tournamentId: String) {

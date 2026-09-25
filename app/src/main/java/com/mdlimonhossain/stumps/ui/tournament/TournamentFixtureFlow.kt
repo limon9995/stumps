@@ -49,6 +49,8 @@ import kotlinx.coroutines.launch
  * since a tournament team's roster should stay consistent match after match.
  */
 private sealed interface FixtureFlowStep {
+    // Shown for a moment while we check how far an already-started match got (see resumeStep).
+    data object Loading : FixtureFlowStep
     data object Toss : FixtureFlowStep
     data class Lineup(val input: QuickMatchInput) : FixtureFlowStep
     data class Scoring(val matchId: String, val input: QuickMatchInput, val firstInnings: LiveInnings? = null) : FixtureFlowStep
@@ -73,7 +75,11 @@ fun TournamentFixtureFlow(
     // onClick, which itself can't be a suspend function.
     val scope = rememberCoroutineScope()
 
-    var step by remember { mutableStateOf<FixtureFlowStep>(FixtureFlowStep.Toss) }
+    // A fixture that has NEVER been started begins at the toss. One that HAS a match already
+    // (matchId is set) must NOT go through the toss again — that used to create a brand new,
+    // duplicate match every time the card was tapped. Instead it starts at Loading, and the
+    // LaunchedEffect below works out exactly where to pick it back up.
+    var step by remember { mutableStateOf<FixtureFlowStep>(if (fixture.matchId == null) FixtureFlowStep.Toss else FixtureFlowStep.Loading) }
     // null while we're still loading each team's saved player roster from the database.
     var teamAPlayers by remember { mutableStateOf<List<String>?>(null) }
     var teamBPlayers by remember { mutableStateOf<List<String>?>(null) }
@@ -83,8 +89,13 @@ fun TournamentFixtureFlow(
 
     // Load both teams' rosters once, as soon as this fixture is opened.
     LaunchedEffect(fixture.id) {
-        teamAPlayers = app.teamRepository.getPlayersOnce(fixture.teamAId).map { it.name }
-        teamBPlayers = app.teamRepository.getPlayersOnce(fixture.teamBId).map { it.name }
+        val aNames = app.teamRepository.getPlayersOnce(fixture.teamAId).map { it.name }
+        val bNames = app.teamRepository.getPlayersOnce(fixture.teamBId).map { it.name }
+        teamAPlayers = aNames
+        teamBPlayers = bNames
+        // Already-started match? Jump straight to wherever it was left off.
+        val existingMatchId = fixture.matchId ?: return@LaunchedEffect
+        step = resumeStep(app, matchViewModel, existingMatchId, teamAName, aNames, teamBName, bNames)
     }
 
     val aPlayers = teamAPlayers
@@ -96,6 +107,8 @@ fun TournamentFixtureFlow(
     }
 
     when (val s = step) {
+        FixtureFlowStep.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+
         FixtureFlowStep.Toss -> TossScreen(
             teamAName = teamAName,
             teamBName = teamBName,
@@ -138,7 +151,11 @@ fun TournamentFixtureFlow(
         )
 
         is FixtureFlowStep.Scoring -> {
-            val battingIsA = battingIsTeamA(s.input)
+            // Who's batting RIGHT NOW? In the first innings it's whoever the toss says. In the
+            // SECOND innings (firstInnings != null) it's the OTHER team. `!=` on two true/false
+            // values means "flip the answer when we're in the second innings". Without this flip
+            // the second innings showed the wrong team's names (batters appeared as "?").
+            val battingIsA = battingIsTeamA(s.input) != (s.firstInnings != null)
             val battingNames = if (battingIsA) s.input.teamAPlayers else s.input.teamBPlayers
             val bowlingNames = if (battingIsA) s.input.teamBPlayers else s.input.teamAPlayers
             // Two SEPARATE maps (not one combined one) — see the matching comment in MatchFlow.kt
@@ -215,9 +232,63 @@ fun TournamentFixtureFlow(
                 app.matchRepository.finalizeCompletedMatch(s.matchId)
                 innings = app.matchRepository.getFinalInningsStates(s.matchId)
             }
-            innings?.let { MatchSummaryScreen(innings = it, onDone = onDone) }
+            innings?.let {
+                MatchSummaryScreen(
+                    innings = it,
+                    onDone = onDone,
+                    stageLabel = com.mdlimonhossain.stumps.data.local.db.tournament.FixtureStage.label(fixture.stage),
+                    doneLabel = "টুর্নামেন্টে ফিরে যাও"
+                )
+            }
                 ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         }
+    }
+}
+
+/**
+ * Works out where to pick an already-started fixture back up, by looking at its saved innings:
+ *  - 1st innings still going        -> carry on scoring it
+ *  - 1st innings over, no 2nd yet   -> pick the chasing team's opening players
+ *  - 2nd innings still going        -> carry on scoring the chase
+ *  - everything finished            -> show the final scorecard
+ * The toss result is read back from the saved match, so the batting order stays right.
+ */
+private suspend fun resumeStep(
+    app: StumpsApplication,
+    matchViewModel: MatchViewModel,
+    matchId: String,
+    teamAName: String,
+    teamAPlayers: List<String>,
+    teamBName: String,
+    teamBPlayers: List<String>
+): FixtureFlowStep {
+    val match = app.matchRepository.getMatchOnce(matchId) ?: return FixtureFlowStep.Summary(matchId)
+    val input = QuickMatchInput(
+        teamAName = teamAName, teamAPlayers = teamAPlayers,
+        teamBName = teamBName, teamBPlayers = teamBPlayers,
+        oversLimit = match.oversLimit,
+        tossWinnerIsTeamA = match.tossWinnerTeamId == match.teamAId,
+        tossDecisionIsBat = match.tossDecision != "BOWL"
+    )
+    val all = app.matchRepository.getFinalInningsStates(matchId)
+    val first = all.firstOrNull { it.innings.inningsNumber == 1 } ?: return FixtureFlowStep.Summary(matchId)
+    val second = all.firstOrNull { it.innings.inningsNumber == 2 }
+    // An innings is "done" when it's all out / out of overs, or the chasing side has hit the target.
+    fun isDone(x: InningsSummary) = x.state.isInningsComplete || x.innings.targetRuns?.let { x.state.totalRuns >= it } == true
+    // The scoring flow keeps the finished first innings as a LiveInnings (innings + match + state).
+    val firstAsLive = LiveInnings(first.innings, match, first.state)
+
+    return when {
+        second == null && !isDone(first) -> {
+            matchViewModel.watchInnings(first.innings.id)
+            FixtureFlowStep.Scoring(matchId, input)
+        }
+        second == null -> FixtureFlowStep.SecondLineup(matchId, input, firstAsLive)
+        match.status != "COMPLETED" && !isDone(second) -> {
+            matchViewModel.watchInnings(second.innings.id)
+            FixtureFlowStep.Scoring(matchId, input, firstAsLive)
+        }
+        else -> FixtureFlowStep.Summary(matchId)
     }
 }
 

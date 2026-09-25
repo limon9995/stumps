@@ -150,4 +150,39 @@ object TournamentEngine {
         }
         return fixtures
     }
+
+    /**
+     * Decides the KNOCKOUT matches once the league is over, from the final points table.
+     *
+     * `rankedTeamIds` must be the league table's team ids in order: 1st place first.
+     *
+     *  - 4 or more teams -> two semi-finals: 1st vs 4th, and 2nd vs 3rd. (Same as the IPL /
+     *    World Cup idea: the table-topper gets the "easiest" opponent as a reward.)
+     *  - 2 or 3 teams -> no semi-finals needed; 1st and 2nd go straight into the final.
+     *  - fewer than 2 teams -> no knockouts possible at all (returns null).
+     *
+     * The higher-ranked team is always put FIRST in each pair (as "Team A") — see knockoutWinner
+     * for why that matters.
+     *
+     * Returns the stage name ("SEMI_FINAL" or "FINAL") and the list of pairs to play.
+     */
+    fun knockoutPairings(rankedTeamIds: List<String>): Pair<String, List<Pair<String, String>>>? = when {
+        rankedTeamIds.size >= 4 -> "SEMI_FINAL" to listOf(
+            rankedTeamIds[0] to rankedTeamIds[3],
+            rankedTeamIds[1] to rankedTeamIds[2]
+        )
+        rankedTeamIds.size >= 2 -> "FINAL" to listOf(rankedTeamIds[0] to rankedTeamIds[1])
+        else -> null
+    }
+
+    /**
+     * Who wins a KNOCKOUT match (a semi-final or the final), given both teams' final runs.
+     *
+     * Normally that's just whoever scored more. But a knockout match can't end without a winner
+     * (someone HAS to go through), and this app has no super over yet — so if it's a tie, the
+     * team that finished HIGHER in the league table goes through. That's always Team A, because
+     * knockoutPairings puts the higher-ranked team first.
+     */
+    fun knockoutWinner(teamAId: String, teamARuns: Int, teamBId: String, teamBRuns: Int): String =
+        if (teamBRuns > teamARuns) teamBId else teamAId
 }

@@ -89,4 +89,26 @@ class TournamentEngineTest {
         assertEquals(6, fixtures.size) // 4 choose 2
         assertEquals(setOf("A" to "B", "A" to "C", "A" to "D", "B" to "C", "B" to "D", "C" to "D"), fixtures.toSet())
     }
+
+    // 4+ teams: semi-finals are 1st v 4th and 2nd v 3rd (5th place and below are knocked out).
+    @Test
+    fun knockoutPairings_fourOrMoreTeams_makesSemiFinals() {
+        val result = TournamentEngine.knockoutPairings(listOf("A", "B", "C", "D", "E"))
+        assertEquals("SEMI_FINAL" to listOf("A" to "D", "B" to "C"), result)
+    }
+
+    // 2-3 teams: no semi-finals, the top two go straight to the final.
+    @Test
+    fun knockoutPairings_twoOrThreeTeams_goesStraightToFinal() {
+        assertEquals("FINAL" to listOf("A" to "B"), TournamentEngine.knockoutPairings(listOf("A", "B", "C")))
+        assertEquals(null, TournamentEngine.knockoutPairings(listOf("A")))
+    }
+
+    // A knockout tie can't be left without a winner — the higher-ranked Team A goes through.
+    @Test
+    fun knockoutWinner_tieGoesToHigherRankedTeamA() {
+        assertEquals("A", TournamentEngine.knockoutWinner("A", 100, "B", 100))
+        assertEquals("B", TournamentEngine.knockoutWinner("A", 100, "B", 101))
+        assertEquals("A", TournamentEngine.knockoutWinner("A", 150, "B", 90))
+    }
 }

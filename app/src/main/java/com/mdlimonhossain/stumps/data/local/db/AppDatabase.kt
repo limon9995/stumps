@@ -50,7 +50,7 @@ import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentTeamEntity
         ClubEntity::class,
         FollowEntity::class
     ],
-    version = 7, // bumped from 6 when matches.resultText was added
+    version = 8, // bumped from 7 when tournament_fixtures.stage was added (semi-finals + final)
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -127,6 +127,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Adds tournament_fixtures.stage — which part of the tournament a match belongs to
+        // (LEAGUE / SEMI_FINAL / FINAL). Every fixture that already exists was a normal league
+        // match, so they all get 'LEAGUE' as their starting value.
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tournament_fixtures ADD COLUMN stage TEXT NOT NULL DEFAULT 'LEAGUE'")
+            }
+        }
+
         // We only ever want ONE database connection open at a time for the whole app — opening
         // multiple would waste memory and could cause weird bugs. @Volatile + synchronized here
         // is a standard Kotlin/Java pattern called a "singleton": the first time getInstance is
@@ -141,7 +150,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "stumps.db" // the actual filename this gets saved as on the phone's storage
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     // A real migration now exists for every version bump so far (see above). This
                     // destructive fallback only kicks in for a version jump nobody's written a
                     // migration for yet — every NEW schema change from here on should add its own

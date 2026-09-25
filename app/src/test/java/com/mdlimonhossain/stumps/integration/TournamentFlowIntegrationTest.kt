@@ -142,6 +142,76 @@ class TournamentFlowIntegrationTest {
         )
     }
 
+    /**
+     * Plays a WHOLE 4-team tournament, start to finish: 6 league matches -> 2 semi-finals ->
+     * the final -> a champion. In every match here the team batting first scores 12 and the
+     * chasing team scores 0, so "Team A" of each fixture always wins — which makes the final
+     * league table easy to predict: T1 (3 wins), T2 (2), T3 (1), T4 (0).
+     */
+    @Test
+    fun fullTournament_leagueThenSemiFinalsThenFinal_crownsChampion() = runBlocking {
+        val squads = (1..4).map { squad("T${it}_P") }
+        val teamIds = squads.mapIndexed { i, players ->
+            teamRepository.createTeam(organizerUid, "Team ${i + 1}", players.map { it to PlayerRole.BATSMAN })
+        }
+        val tournamentId = tournamentRepository.createTournament(
+            organizerUid, "Knockout Cup", oversPerMatch = 2, venue = null, selectedTeamIds = teamIds
+        )
+        fun playersOf(teamId: String) = squads[teamIds.indexOf(teamId)]
+        suspend fun playAll(stage: String) {
+            val toPlay = tournamentRepository.observeFixtures(tournamentId).first().filter { it.stage == stage && it.matchId == null }
+            for (f in toPlay) {
+                playMatch(
+                    fixture = f, tournamentId = tournamentId,
+                    teamAPlayers = playersOf(f.teamAId), teamBPlayers = playersOf(f.teamBId),
+                    firstInningsBalls = List(12) { BallPlan(runs = 1) },
+                    secondInningsBalls = List(12) { BallPlan(runs = 0) }
+                )
+            }
+        }
+
+        // ---- League: can't advance until every league match is done ----
+        var progress = tournamentRepository.computeProgress(tournamentId)
+        assertEquals(com.mdlimonhossain.stumps.domain.repository.TournamentPhase.LEAGUE, progress.phase)
+        assertEquals(false, progress.canAdvance)
+        playAll("LEAGUE")
+        progress = tournamentRepository.computeProgress(tournamentId)
+        assertEquals(6, progress.stagePlayed)
+        assertTrue("league finished -> semi-finals can start", progress.canAdvance)
+
+        // ---- Semi-finals: 1st v 4th, 2nd v 3rd ----
+        tournamentRepository.advanceToNextStage(tournamentId)
+        tournamentRepository.advanceToNextStage(tournamentId) // a double-tap must NOT create a second set
+        val semis = tournamentRepository.observeFixtures(tournamentId).first().filter { it.stage == "SEMI_FINAL" }
+        assertEquals(2, semis.size)
+        assertEquals(setOf(teamIds[0] to teamIds[3], teamIds[1] to teamIds[2]), semis.map { it.teamAId to it.teamBId }.toSet())
+        assertEquals(com.mdlimonhossain.stumps.domain.repository.TournamentPhase.SEMI_FINALS, tournamentRepository.computeProgress(tournamentId).phase)
+
+        // Semi-final results must NOT change the league points table.
+        playAll("SEMI_FINAL")
+        assertEquals(listOf(6, 4, 2, 0), tournamentRepository.computeStandings(tournamentId).map { it.points })
+
+        // ---- Final: the two semi-final winners (T1 and T2) ----
+        tournamentRepository.advanceToNextStage(tournamentId)
+        val finals = tournamentRepository.observeFixtures(tournamentId).first().filter { it.stage == "FINAL" }
+        assertEquals(1, finals.size)
+        assertEquals(teamIds[0] to teamIds[1], finals.first().teamAId to finals.first().teamBId)
+        playAll("FINAL")
+
+        // ---- Champion ----
+        progress = tournamentRepository.computeProgress(tournamentId)
+        assertEquals(com.mdlimonhossain.stumps.domain.repository.TournamentPhase.FINISHED, progress.phase)
+        assertEquals("Team 1", progress.championName)
+        assertEquals("Team 2", progress.runnerUpName)
+
+        // Every fixture's mini scoreboard is filled in, and the final's winner is Team 1.
+        val scores = tournamentRepository.computeFixtureScores(tournamentId)
+        assertEquals(9, scores.size)
+        assertTrue(scores.values.all { it.isComplete })
+        assertEquals(teamIds[0], scores[finals.first().id]?.winnerTeamId)
+        assertEquals("12/0 (2.0)", scores[finals.first().id]?.teamAScore)
+    }
+
     @Test
     fun liveInningsReactsToLiveBroadcastToggle_notJustToNewBalls() = runBlocking {
         val teamAId = teamRepository.createTeam(organizerUid, "Team A", squad("A_P").map { it to PlayerRole.BATSMAN })

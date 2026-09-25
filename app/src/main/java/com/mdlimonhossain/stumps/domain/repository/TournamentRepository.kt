@@ -2,6 +2,7 @@ package com.mdlimonhossain.stumps.domain.repository
 
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.mdlimonhossain.stumps.data.local.db.tournament.FixtureStage
 import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentDao
 import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentEntity
 import com.mdlimonhossain.stumps.data.local.db.tournament.TournamentFixtureDao
@@ -66,6 +67,41 @@ data class TournamentLeaderboards(
     // mostSixes/mostFours above, which are summed across the whole tournament.
     val inningsMostSixes: LeaderboardEntry? = null,
     val inningsMostFours: LeaderboardEntry? = null
+)
+
+/**
+ * A tiny scoreboard for ONE fixture, for the Matches tab's cards — each team's score so far,
+ * whether the match has started / finished, and who won.
+ */
+data class FixtureScore(
+    val teamAScore: String? = null, // e.g. "120/5 (18.2)" — null if Team A hasn't batted yet
+    val teamBScore: String? = null,
+    val isStarted: Boolean = false,
+    val isComplete: Boolean = false,
+    val resultText: String? = null, // e.g. "Dhaka Tigers ৪৫ রানে জয়ী"
+    // Who won. For a LEAGUE match this is null on a tie. For a knockout match there is ALWAYS
+    // a winner once it's complete (see TournamentEngine.knockoutWinner for the tie rule).
+    val winnerTeamId: String? = null
+)
+
+/** Which part of its life a tournament is in right now — drives the "journey" bar on the Home tab. */
+enum class TournamentPhase { SETUP, LEAGUE, SEMI_FINALS, FINAL, FINISHED }
+
+/**
+ * A summary of "where is this tournament up to?" — worked out fresh from the fixtures and their
+ * matches, never stored (same "replay everything" idea as the points table).
+ */
+data class TournamentProgress(
+    val phase: TournamentPhase = TournamentPhase.SETUP,
+    val stagePlayed: Int = 0, // how many matches of the CURRENT stage are finished
+    val stageTotal: Int = 0, // how many matches the current stage has in total
+    // True when every match of the current stage is done, so the NEXT stage can be created.
+    val canAdvance: Boolean = false,
+    val nextStageLabel: String? = null, // "সেমিফাইনাল" or "ফাইনাল" — what the advance button makes
+    val qualifyCount: Int = 0, // how many teams from the league table go into the knockouts (4 or 2)
+    val championTeamId: String? = null,
+    val championName: String? = null,
+    val runnerUpName: String? = null
 )
 
 class TournamentRepository(
@@ -231,6 +267,9 @@ class TournamentRepository(
      * two OLD teams is left completely untouched.
      */
     suspend fun addTeamToTournament(tournamentId: String, teamId: String) {
+        // Once the knockouts (semi-final / final) have started, the league is closed — a new
+        // team joining now would have league matches that can never count for anything.
+        if (fixtureDao.getForTournamentOnce(tournamentId).any { it.stage != FixtureStage.LEAGUE }) return
         val existingTeams = tournamentTeamDao.getForTournamentOnce(tournamentId)
         if (existingTeams.any { it.teamId == teamId }) return // already in this tournament — nothing to do
         val teamName = teamRepository.getTeamOnce(teamId)?.name ?: return
@@ -293,7 +332,8 @@ class TournamentRepository(
                 "round" to fixture.round,
                 "teamAId" to fixture.teamAId,
                 "teamBId" to fixture.teamBId,
-                "matchId" to fixture.matchId
+                "matchId" to fixture.matchId,
+                "stage" to fixture.stage
             )
         ).await()
     }
@@ -383,24 +423,18 @@ class TournamentRepository(
      */
     suspend fun computeStandings(tournamentId: String): List<TeamStanding> {
         val teams = tournamentTeamDao.getForTournamentOnce(tournamentId)
-        // Only look at fixtures that have actually had a match started (matchId != null).
-        val fixtures = fixtureDao.getForTournamentOnce(tournamentId).filter { it.matchId != null }
+        // Only LEAGUE fixtures count towards the points table (semi-finals and the final are
+        // knockouts — they decide the champion, not points), and only ones that have been started.
+        val fixtures = fixtureDao.getForTournamentOnce(tournamentId)
+            .filter { it.matchId != null && it.stage == FixtureStage.LEAGUE }
 
         val results = mutableListOf<CompletedMatchResult>()
         for (fixture in fixtures) {
-            val matchId = fixture.matchId ?: continue
-            val match = matchRepository.getMatchOnce(matchId) ?: continue
-            val innings = matchRepository.getFinalInningsStates(matchId)
-            if (innings.size < 2) continue // match not finished yet (still on the first innings)
-
-            // Each fixture's match creates its OWN fresh team rows (see MatchRepository.createQuickMatch),
-            // so we can't compare ids directly — instead we match up innings to fixture teams
-            // by comparing TEAM NAMES, which are always kept the same on purpose.
-            val teamAName = teams.firstOrNull { it.teamId == fixture.teamAId }?.teamName
-            val teamBName = teams.firstOrNull { it.teamId == fixture.teamBId }?.teamName
-            val aInnings = innings.firstOrNull { it.battingTeamName == teamAName }
-            val bInnings = innings.firstOrNull { it.battingTeamName == teamBName }
-            if (aInnings == null || bInnings == null) continue
+            // readFixture (below) does the fiddly work of finding each team's innings.
+            val reading = readFixture(fixture, teams) ?: continue
+            if (!reading.isComplete) continue // still being played — doesn't count yet
+            val aInnings = reading.teamAInnings ?: continue
+            val bInnings = reading.teamBInnings ?: continue
 
             // Boil this whole match down to just the numbers TournamentEngine needs for the
             // points table and Net Run Rate math (10 wickets down = "all out").
@@ -408,7 +442,7 @@ class TournamentRepository(
                 CompletedMatchResult(
                     teamAId = fixture.teamAId,
                     teamBId = fixture.teamBId,
-                    oversLimit = match.oversLimit,
+                    oversLimit = reading.oversLimit,
                     teamARuns = aInnings.state.totalRuns,
                     teamALegalBalls = aInnings.state.legalBallsBowled,
                     teamAAllOut = aInnings.state.totalWickets >= 10,
@@ -421,6 +455,194 @@ class TournamentRepository(
 
         // Hand everything to TournamentEngine, which does the actual points/NRR maths.
         return TournamentEngine.computeStandings(teams.map { it.teamId to it.teamName }, results)
+    }
+
+    /** Everything readFixture found out about one fixture's match. */
+    private class FixtureReading(
+        val allInnings: List<InningsSummary>,
+        val teamAInnings: InningsSummary?, // the innings where the fixture's Team A batted (null if not yet)
+        val teamBInnings: InningsSummary?,
+        val oversLimit: Int,
+        val resultText: String?,
+        val isComplete: Boolean
+    )
+
+    /**
+     * Reads one fixture's match from the database: each team's innings, and whether the match
+     * is actually FINISHED. Returns null if the fixture hasn't been started yet.
+     *
+     * "Finished" means the second innings is over — either all out / overs used up, or the
+     * chasing team has already reached its target (the scoring screen stops there too).
+     */
+    private suspend fun readFixture(fixture: TournamentFixtureEntity, teams: List<TournamentTeamEntity>): FixtureReading? {
+        val matchId = fixture.matchId ?: return null
+        val match = matchRepository.getMatchOnce(matchId) ?: return null
+        val innings = matchRepository.getFinalInningsStates(matchId)
+
+        // Each fixture's match creates its OWN fresh team rows (see MatchRepository.createQuickMatch),
+        // so we can't compare ids directly — instead we match up innings to fixture teams
+        // by comparing TEAM NAMES, which are always kept the same on purpose.
+        val teamAName = teams.firstOrNull { it.teamId == fixture.teamAId }?.teamName
+        val teamBName = teams.firstOrNull { it.teamId == fixture.teamBId }?.teamName
+        val second = innings.firstOrNull { it.innings.inningsNumber == 2 }
+        val targetReached = second != null && second.innings.targetRuns?.let { second.state.totalRuns >= it } == true
+        val isComplete = match.status == "COMPLETED" || (second != null && (second.state.isInningsComplete || targetReached))
+        return FixtureReading(
+            allInnings = innings,
+            teamAInnings = innings.firstOrNull { it.battingTeamName == teamAName },
+            teamBInnings = innings.firstOrNull { it.battingTeamName == teamBName },
+            oversLimit = match.oversLimit,
+            resultText = match.resultText,
+            isComplete = isComplete
+        )
+    }
+
+    /** "120/5 (18.2)" — the classic way a cricket score is written: runs/wickets (overs). */
+    private fun InningsSummary.scoreLine(): String = "${state.totalRuns}/${state.totalWickets} (${state.oversDisplay})"
+
+    /**
+     * A mini scoreboard for EVERY fixture in the tournament (fixture id -> its score), for the
+     * Matches tab's cards.
+     */
+    suspend fun computeFixtureScores(tournamentId: String): Map<String, FixtureScore> {
+        val teams = tournamentTeamDao.getForTournamentOnce(tournamentId)
+        return fixtureDao.getForTournamentOnce(tournamentId).associate { fixture ->
+            fixture.id to fixtureScore(fixture, teams)
+        }
+    }
+
+    /** Builds the mini scoreboard (see FixtureScore) for ONE fixture. */
+    private suspend fun fixtureScore(fixture: TournamentFixtureEntity, teams: List<TournamentTeamEntity>): FixtureScore {
+        val reading = readFixture(fixture, teams) ?: return FixtureScore() // not started yet
+        val a = reading.teamAInnings
+        val b = reading.teamBInnings
+        var winner: String? = null
+        var result = reading.resultText ?: if (reading.isComplete) matchResultText(reading.allInnings) else null
+        if (reading.isComplete && a != null && b != null) {
+            val aRuns = a.state.totalRuns
+            val bRuns = b.state.totalRuns
+            if (fixture.stage == FixtureStage.LEAGUE) {
+                winner = when {
+                    aRuns > bRuns -> fixture.teamAId
+                    bRuns > aRuns -> fixture.teamBId
+                    else -> null // a league tie — 1 point each, no winner
+                }
+            } else {
+                winner = TournamentEngine.knockoutWinner(fixture.teamAId, aRuns, fixture.teamBId, bRuns)
+                if (aRuns == bRuns) {
+                    // Explain the tie rule right on the card, so nobody wonders why a tie has a winner.
+                    val name = teams.firstOrNull { it.teamId == winner }?.teamName ?: ""
+                    result = "ম্যাচ টাই — লিগ টেবিলে উপরে থাকায় $name এগিয়ে গেল"
+                }
+            }
+        }
+        return FixtureScore(
+            teamAScore = a?.scoreLine(),
+            teamBScore = b?.scoreLine(),
+            isStarted = true,
+            isComplete = reading.isComplete,
+            resultText = result,
+            winnerTeamId = winner
+        )
+    }
+
+    /**
+     * Works out where the tournament is up to right now: still in the league, in the
+     * semi-finals, in the final, or FINISHED (with a champion). Also says whether the organizer
+     * can press "start the next stage" yet — only once every match of the current stage is done.
+     */
+    suspend fun computeProgress(tournamentId: String): TournamentProgress {
+        val teams = tournamentTeamDao.getForTournamentOnce(tournamentId)
+        val fixtures = fixtureDao.getForTournamentOnce(tournamentId)
+        val scores = fixtures.associate { it.id to fixtureScore(it, teams) }
+        fun nameOf(teamId: String?) = teams.firstOrNull { it.teamId == teamId }?.teamName
+
+        val league = fixtures.filter { it.stage == FixtureStage.LEAGUE }
+        val semis = fixtures.filter { it.stage == FixtureStage.SEMI_FINAL }
+        val finals = fixtures.filter { it.stage == FixtureStage.FINAL }
+        // 4+ teams -> top 4 reach the semi-finals; 2-3 teams -> top 2 go straight to the final.
+        val qualifyCount = if (teams.size >= 4) 4 else 2
+        fun doneCount(list: List<TournamentFixtureEntity>) = list.count { scores[it.id]?.isComplete == true }
+
+        return when {
+            // The final exists: either it's still to be played, or it's done and we have a champion.
+            finals.isNotEmpty() -> {
+                val final = finals.first()
+                val score = scores[final.id]
+                val championId = score?.winnerTeamId
+                if (score?.isComplete == true && championId != null) {
+                    val runnerUpId = if (championId == final.teamAId) final.teamBId else final.teamAId
+                    TournamentProgress(
+                        phase = TournamentPhase.FINISHED, stagePlayed = 1, stageTotal = 1,
+                        qualifyCount = qualifyCount,
+                        championTeamId = championId, championName = nameOf(championId), runnerUpName = nameOf(runnerUpId)
+                    )
+                } else {
+                    TournamentProgress(phase = TournamentPhase.FINAL, stagePlayed = 0, stageTotal = 1, qualifyCount = qualifyCount)
+                }
+            }
+            semis.isNotEmpty() -> TournamentProgress(
+                phase = TournamentPhase.SEMI_FINALS,
+                stagePlayed = doneCount(semis), stageTotal = semis.size,
+                canAdvance = doneCount(semis) == semis.size,
+                nextStageLabel = FixtureStage.label(FixtureStage.FINAL),
+                qualifyCount = qualifyCount
+            )
+            teams.size < 2 -> TournamentProgress(phase = TournamentPhase.SETUP, qualifyCount = qualifyCount)
+            else -> TournamentProgress(
+                phase = TournamentPhase.LEAGUE,
+                stagePlayed = doneCount(league), stageTotal = league.size,
+                canAdvance = league.isNotEmpty() && doneCount(league) == league.size,
+                nextStageLabel = FixtureStage.label(if (teams.size >= 4) FixtureStage.SEMI_FINAL else FixtureStage.FINAL),
+                qualifyCount = qualifyCount
+            )
+        }
+    }
+
+    /**
+     * Creates the NEXT stage's matches, once every match of the current stage is finished:
+     *  - league done -> semi-finals (1st v 4th, 2nd v 3rd), or straight to the final with 2-3 teams
+     *  - semi-finals done -> the final, between the two semi-final winners
+     * Does nothing if the current stage isn't finished yet (so a double-tap can't make it twice).
+     */
+    suspend fun advanceToNextStage(tournamentId: String) {
+        val progress = computeProgress(tournamentId)
+        if (!progress.canAdvance) return
+        val teams = tournamentTeamDao.getForTournamentOnce(tournamentId)
+        val fixtures = fixtureDao.getForTournamentOnce(tournamentId)
+        var nextRound = (fixtures.maxOfOrNull { it.round } ?: 0) + 1
+        // The final league table — used both to seed the knockouts and to break ties.
+        val rankedIds = computeStandings(tournamentId).map { it.teamId }
+
+        val newPairs: List<Pair<String, String>>
+        val newStage: String
+        if (progress.phase == TournamentPhase.LEAGUE) {
+            val (stage, pairs) = TournamentEngine.knockoutPairings(rankedIds) ?: return
+            newStage = stage
+            newPairs = pairs
+        } else {
+            // Semi-finals are done: find each one's winner, in the order the semis were made.
+            val winners = fixtures.filter { it.stage == FixtureStage.SEMI_FINAL }
+                .sortedBy { it.round }
+                .mapNotNull { fixtureScore(it, teams).winnerTeamId }
+            if (winners.size != 2) return
+            // Put whichever finalist finished higher in the league first (as "Team A"), so the
+            // knockout tie rule works the same way in the final too.
+            val ordered = winners.sortedBy { id -> rankedIds.indexOf(id).let { if (it < 0) Int.MAX_VALUE else it } }
+            newStage = FixtureStage.FINAL
+            newPairs = listOf(ordered[0] to ordered[1])
+        }
+
+        // Each knockout match gets its own round number, so "Semi-final 1" and "Semi-final 2"
+        // always show in the same order.
+        val newFixtures = newPairs.map { (a, b) ->
+            TournamentFixtureEntity(
+                id = UUID.randomUUID().toString(), tournamentId = tournamentId,
+                round = nextRound++, teamAId = a, teamBId = b, stage = newStage
+            )
+        }
+        fixtureDao.upsertAll(newFixtures)
+        runCatching { newFixtures.forEach { pushFixtureToCloud(tournamentId, it) } }
     }
 
     /**
@@ -551,14 +773,16 @@ class TournamentRepository(
                 round = (doc.getLong("round") ?: 0L).toInt(),
                 teamAId = doc.getString("teamAId") ?: "",
                 teamBId = doc.getString("teamBId") ?: "",
-                matchId = doc.getString("matchId")
+                matchId = doc.getString("matchId"),
+                stage = doc.getString("stage") ?: FixtureStage.LEAGUE
             )
         }
 
     /** Cloud equivalent of computeStandings — reads each played fixture's match from Firestore instead of local Room. */
     suspend fun computeCloudStandings(tournamentId: String): List<TeamStanding> {
         val teams = getCloudTeams(tournamentId)
-        val fixtures = getCloudFixtures(tournamentId).filter { it.matchId != null }
+        // Only LEAGUE matches count towards the points table — semi-finals and the final don't.
+        val fixtures = getCloudFixtures(tournamentId).filter { it.matchId != null && it.stage == FixtureStage.LEAGUE }
 
         val results = mutableListOf<CompletedMatchResult>()
         for (fixture in fixtures) {

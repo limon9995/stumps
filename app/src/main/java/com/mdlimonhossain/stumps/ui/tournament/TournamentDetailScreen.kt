@@ -83,6 +83,9 @@ fun TournamentDetailScreen(tournamentId: String, organizerUid: String, onBack: (
     val standings by viewModel.standings.collectAsState()
     val leaderboards by viewModel.leaderboards.collectAsState()
     val boundaryCounts by viewModel.boundaryCounts.collectAsState()
+    // Where the tournament is up to (league / semis / final / champion) and every match's mini scoreboard.
+    val progress by viewModel.progress.collectAsState()
+    val fixtureScores by viewModel.fixtureScores.collectAsState()
 
     var tab by remember { mutableStateOf(DetailTab.HOME) }
     // Which fixture (if any) is currently being scored/viewed — null means show the tab view instead.
@@ -91,6 +94,10 @@ fun TournamentDetailScreen(tournamentId: String, organizerUid: String, onBack: (
     // Recalculate the points table / leaderboard whenever the user switches TO that tab, or
     // whenever the fixture list changes (e.g. a match just finished) while already on that tab.
     // HOME also needs leaderboards + boundary counts loaded, since its own preview sections reuse that same data.
+    // Whenever the fixture list changes (a match started, a stage was created...), work out the
+    // tournament's progress and every match's score again.
+    LaunchedEffect(fixtures) { viewModel.refreshProgress(tournamentId) }
+
     LaunchedEffect(tab, fixtures) {
         if (tab == DetailTab.POINTS) viewModel.refreshStandings(tournamentId)
         if (tab == DetailTab.STATISTICS || tab == DetailTab.HOME) viewModel.refreshLeaderboards(tournamentId)
@@ -113,9 +120,10 @@ fun TournamentDetailScreen(tournamentId: String, organizerUid: String, onBack: (
             organizerUid = organizerUid,
             onDone = {
                 activeFixture = null
-                // Refresh the table and leaderboard now that this fixture's result is in.
+                // Refresh the table, leaderboard, scores and stage progress now that this fixture's result is in.
                 viewModel.refreshStandings(tournamentId)
                 viewModel.refreshLeaderboards(tournamentId)
+                viewModel.refreshProgress(tournamentId)
             }
         )
         return
@@ -152,17 +160,31 @@ fun TournamentDetailScreen(tournamentId: String, organizerUid: String, onBack: (
                 onSeeMatches = { tab = DetailTab.MATCHES },
                 viewerUid = organizerUid,
                 onRename = { newName -> viewModel.rename(t, newName) },
-                onDelete = { viewModel.delete(t, onBack) }
+                onDelete = { viewModel.delete(t, onBack) },
+                progress = progress,
+                onAdvance = { viewModel.advanceStage(tournamentId) }
             )
             DetailTab.TEAMS -> TeamsTab(
                 teams = teams,
                 viewerUid = organizerUid,
                 onOpenCreateTeam = onOpenCreateTeam,
                 onAddTeam = { teamId -> viewModel.addTeam(tournamentId, teamId) },
-                onGoToMatches = { tab = DetailTab.MATCHES }
+                onGoToMatches = { tab = DetailTab.MATCHES },
+                // Once the semi-finals / final exist, the league is closed to new teams.
+                knockoutsStarted = progress.phase == com.mdlimonhossain.stumps.domain.repository.TournamentPhase.SEMI_FINALS ||
+                    progress.phase == com.mdlimonhossain.stumps.domain.repository.TournamentPhase.FINAL ||
+                    progress.phase == com.mdlimonhossain.stumps.domain.repository.TournamentPhase.FINISHED
             )
-            DetailTab.MATCHES -> MatchesTab(fixtures = fixtures, teams = teams, onOpenFixture = { activeFixture = it }, onGoToTeams = { tab = DetailTab.TEAMS })
-            DetailTab.POINTS -> PointsTab(standings = standings)
+            DetailTab.MATCHES -> MatchesTab(
+                fixtures = fixtures,
+                teams = teams,
+                scores = fixtureScores,
+                progress = progress,
+                onAdvance = { viewModel.advanceStage(tournamentId) },
+                onOpenFixture = { activeFixture = it },
+                onGoToTeams = { tab = DetailTab.TEAMS }
+            )
+            DetailTab.POINTS -> PointsTab(standings = standings, qualifyCount = if (teams.size >= 2) progress.qualifyCount else 0)
             DetailTab.STATISTICS -> StatisticsTab(leaderboards = leaderboards)
         }
     }
@@ -186,7 +208,9 @@ private fun HomeTab(
     onSeeMatches: () -> Unit,
     viewerUid: String,
     onRename: (String) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    progress: com.mdlimonhossain.stumps.domain.repository.TournamentProgress,
+    onAdvance: () -> Unit
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as com.mdlimonhossain.stumps.StumpsApplication
@@ -268,6 +292,18 @@ private fun HomeTab(
                 }
             }) { Text(if (isFollowing) "Following ✓" else "Follow") }
         }
+        Spacer(Modifier.height(12.dp))
+        // The tournament's journey: League -> Semi-final -> Final -> Champion.
+        TournamentJourney(progress = progress, hasSemiFinals = teams.size >= 4)
+        Spacer(Modifier.height(12.dp))
+        // Once the final is played, a big gold champion banner takes pride of place.
+        val champion = progress.championName
+        if (champion != null) {
+            ChampionCard(championName = champion, runnerUpName = progress.runnerUpName)
+            Spacer(Modifier.height(8.dp))
+        }
+        // "X of Y matches done" + the "start semi-final / final" button when it's time.
+        StageActionCard(progress = progress, onAdvance = onAdvance)
         Spacer(Modifier.height(4.dp))
         // A match needs two teams. So until the tournament has at least 2 teams, this big
         // button takes the organizer to the Teams tab (the real next step) instead of an empty
@@ -285,7 +321,7 @@ private fun HomeTab(
         }
         Row(modifier = Modifier.fillMaxWidth()) {
             Button(onClick = if (needsTeams) onSeeTeams else onSeeMatches, modifier = Modifier.weight(1f)) {
-                Text(if (needsTeams) "টিম যোগ করো" else "START / SCHEDULE MATCH", fontSize = 12.sp)
+                Text(if (needsTeams) "টিম যোগ করো" else "সব ম্যাচ দেখো", fontSize = 12.sp)
             }
         }
 
@@ -420,7 +456,8 @@ private fun TeamsTab(
     viewerUid: String,
     onOpenCreateTeam: () -> Unit,
     onAddTeam: (String) -> Unit,
-    onGoToMatches: () -> Unit
+    onGoToMatches: () -> Unit,
+    knockoutsStarted: Boolean
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as StumpsApplication
@@ -428,11 +465,18 @@ private fun TeamsTab(
     var showAddDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Button(onClick = { showAddDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("+ টিম যোগ করো") }
+        if (knockoutsStarted) {
+            // The league is over, so no more teams can join — explain instead of showing the button.
+            NextStepHint(text = "নকআউট পর্ব শুরু হয়ে গেছে — এখন আর নতুন টিম যোগ করা যাবে না।")
+        } else {
+            Button(onClick = { showAddDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("+ টিম যোগ করো") }
+        }
         Spacer(Modifier.height(8.dp))
         // Tell the organizer where they are in the setup: under 2 teams = keep adding,
         // 2 or more = matches are ready, go play them.
-        if (teams.size < 2) {
+        if (knockoutsStarted) {
+            // nothing extra — the hint above already explains the state
+        } else if (teams.size < 2) {
             NextStepHint(text = "মোট ${teams.size}টা টিম। ম্যাচ তৈরি হতে কমপক্ষে ২টা টিম লাগবে।")
         } else {
             NextStepHint(
@@ -542,11 +586,19 @@ private fun TeamInitialsCircle(name: String) {
     }
 }
 
-/** The fixture schedule — tap one to score/view it. Same content the old single "সূচি" tab had. */
+/**
+ * The fixture schedule, split into sections — League, Semi-finals, Final — with every match
+ * drawn as a mini scoreboard (see FixtureScoreCard). Tap a match to toss/score it, carry on
+ * scoring it, or see its full scorecard once it's finished. The stage card at the top shows
+ * progress and the "start the next stage" button when it's time.
+ */
 @Composable
 private fun MatchesTab(
     fixtures: List<TournamentFixtureEntity>,
     teams: List<com.mdlimonhossain.stumps.data.local.db.tournament.TournamentTeamEntity>,
+    scores: Map<String, com.mdlimonhossain.stumps.domain.repository.FixtureScore>,
+    progress: com.mdlimonhossain.stumps.domain.repository.TournamentProgress,
+    onAdvance: () -> Unit,
     onOpenFixture: (TournamentFixtureEntity) -> Unit,
     onGoToTeams: () -> Unit
 ) {
@@ -563,35 +615,57 @@ private fun MatchesTab(
         )
         return
     }
+    fun nameOf(teamId: String) = teams.firstOrNull { it.teamId == teamId }?.teamName ?: "?"
+    // Group the matches by stage, in tournament order. Knockout stages show newest (the final) FIRST,
+    // since that's what everyone wants to see once it exists.
+    val stages = listOf(
+        com.mdlimonhossain.stumps.data.local.db.tournament.FixtureStage.FINAL,
+        com.mdlimonhossain.stumps.data.local.db.tournament.FixtureStage.SEMI_FINAL,
+        com.mdlimonhossain.stumps.data.local.db.tournament.FixtureStage.LEAGUE
+    )
     LazyColumn(modifier = Modifier.padding(horizontal = 20.dp)) {
-        itemsIndexed(fixtures, key = { _, f -> f.id }) { index, fixture ->
-            val teamAName = teams.firstOrNull { it.teamId == fixture.teamAId }?.teamName ?: "?"
-            val teamBName = teams.firstOrNull { it.teamId == fixture.teamBId }?.teamName ?: "?"
-            AppCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp)
-                    .staggeredEntrance(index),
-                onClick = { onOpenFixture(fixture) }
-            ) {
-                Text(text = "$teamAName vs $teamBName", style = MaterialTheme.typography.titleLarge)
-                // matchId is null until someone actually taps this fixture to start scoring it.
+        item { StageActionCard(progress = progress, onAdvance = onAdvance) }
+        stages.forEach { stage ->
+            val inStage = fixtures.filter { it.stage == stage }.sortedBy { it.round }
+            if (inStage.isEmpty()) return@forEach
+            item(key = "header-$stage") {
                 Text(
-                    text = if (fixture.matchId == null) "শুরু হয়নি — স্কোর করতে ট্যাপ করো" else "সম্পন্ন / চলমান — দেখতে ট্যাপ করো",
-                    style = MaterialTheme.typography.bodyMedium
+                    text = com.mdlimonhossain.stumps.data.local.db.tournament.FixtureStage.label(stage),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
+                )
+            }
+            itemsIndexed(inStage, key = { _, f -> f.id }) { index, fixture ->
+                // "ম্যাচ ৩" for league games; "সেমিফাইনাল ১" / "ফাইনাল" for knockouts.
+                val title = when (stage) {
+                    com.mdlimonhossain.stumps.data.local.db.tournament.FixtureStage.LEAGUE -> "ম্যাচ ${index + 1}"
+                    com.mdlimonhossain.stumps.data.local.db.tournament.FixtureStage.SEMI_FINAL -> "সেমিফাইনাল ${index + 1}"
+                    else -> "🏆 ফাইনাল"
+                }
+                FixtureScoreCard(
+                    fixture = fixture,
+                    title = title,
+                    teamAName = nameOf(fixture.teamAId),
+                    teamBName = nameOf(fixture.teamBId),
+                    score = scores[fixture.id],
+                    modifier = Modifier.padding(vertical = 6.dp).staggeredEntrance(index),
+                    onClick = { onOpenFixture(fixture) }
                 )
             }
         }
+        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
 /** The points table — same content the old "পয়েন্ট টেবিল" tab had. */
 @Composable
-internal fun PointsTab(standings: List<com.mdlimonhossain.stumps.domain.tournament.TeamStanding>) {
+internal fun PointsTab(standings: List<com.mdlimonhossain.stumps.domain.tournament.TeamStanding>, qualifyCount: Int = 0) {
     // The points table can have quite a few columns, so it's wrapped in horizontalScroll to let
     // it scroll sideways on a narrow phone screen instead of squashing everything.
     Column(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
         Row(modifier = Modifier.padding(vertical = 4.dp)) {
+            HeaderCell("", 24)
             HeaderCell("দল", 140)
             HeaderCell("খে", 40)
             HeaderCell("জ", 40)
@@ -606,6 +680,9 @@ internal fun PointsTab(standings: List<com.mdlimonhossain.stumps.domain.tourname
         // colour) so the current table leader visually stands out at a glance.
         standings.forEachIndexed { index, s ->
             val isLeader = index == 0
+            // Teams inside the "qualification zone" (top 4, or top 2 with fewer teams) go on to
+            // the knockouts — they get a green "Q" so everyone can see who's through.
+            val qualifies = index < qualifyCount
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -615,6 +692,12 @@ internal fun PointsTab(standings: List<com.mdlimonhossain.stumps.domain.tourname
                     )
                     .padding(vertical = 4.dp)
             ) {
+                Text(
+                    text = if (qualifies) "Q" else "${index + 1}",
+                    fontWeight = FontWeight.Bold,
+                    color = if (qualifies) PitchGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(24.dp)
+                )
                 Cell(s.teamName, 140, bold = isLeader)
                 Cell("${s.played}", 40, bold = isLeader)
                 Cell("${s.won}", 40, bold = isLeader)
@@ -623,6 +706,14 @@ internal fun PointsTab(standings: List<com.mdlimonhossain.stumps.domain.tourname
                 Cell("${s.points}", 60, bold = isLeader)
                 Cell(formatNrr(s.netRunRate), 70, bold = isLeader)
             }
+        }
+        if (qualifyCount > 0 && standings.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = "Q = পরের ধাপে যাবে (উপরের ${qualifyCount}টা দল)। শুধু লিগ ম্যাচের পয়েন্ট এখানে গোনা হয়।",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
